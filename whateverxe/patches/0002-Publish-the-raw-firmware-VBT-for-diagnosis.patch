@@ -1,0 +1,31 @@
+From 59ab2d7f547760deef28b0d0fb81c6c138694f7e Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 09:33:00 +0530
+Subject: [PATCH 02/47] Publish the raw firmware VBT for diagnosis
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_firmware.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/WhateverXe/kern_firmware.cpp b/WhateverXe/kern_firmware.cpp
+index 751eb82..8eb9167 100644
+--- a/WhateverXe/kern_firmware.cpp
++++ b/WhateverXe/kern_firmware.cpp
+@@ -29,6 +29,8 @@ void XE::xelpReadFirmware(IOPCIDevice *pci) {
+                     auto vbtMap=vbtMemory ? vbtMemory->map(kIOMapReadOnly) : nullptr;
+                     if(vbtMap && vbtMap->getVirtualAddress() && vbtMap->getLength()>=region.bytes) {
+                         const auto data=reinterpret_cast<const void *>(vbtMap->getVirtualAddress());
++                        // Raw firmware table for diagnosis, published even when admission rejects it.
++                        publishBytes(pci,"WhateverXeVBTRaw",data,region.bytes);
+                         firmwarePorts=XELP::VBT::parse(data,region.bytes,xeProfile.family);
+                         if(firmwarePorts.valid()){source=2;publishBytes(pci,"TGLVBT",data,firmwarePorts.bytes);}
+                     }
+@@ -36,6 +38,7 @@ void XE::xelpReadFirmware(IOPCIDevice *pci) {
+                     if(vbtMemory)vbtMemory->release();
+                 }
+                 if(!firmwarePorts.valid()) {
++                    if(!region.address)publishBytes(pci,"WhateverXeVBTRaw",bytes+0x400,region.inlineBytes);
+                     const auto embedded=XELP::VBT::parse(bytes+0x400,region.inlineBytes,xeProfile.family);
+                     if(embedded.valid()) {
+                         firmwarePorts=embedded;source=1;

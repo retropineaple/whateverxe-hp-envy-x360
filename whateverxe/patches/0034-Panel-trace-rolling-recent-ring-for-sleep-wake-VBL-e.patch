@@ -1,0 +1,69 @@
+From 25d2d71f429b8fbd99cfb396b21297df427bae5a Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 20:42:14 +0530
+Subject: [PATCH 34/47] Panel trace: rolling recent ring for sleep/wake (VBL
+ events excluded)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp      | 15 ++++++++++++++-
+ tools/decode_panel_trace.py | 12 +++++++++++-
+ 2 files changed, 25 insertions(+), 2 deletions(-)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 53afdfa..7b9ed2c 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -7046,11 +7046,24 @@ void XE::display13AUXFailRecord(void *port,uint32_t result,uint32_t command) {
+ struct Display13PanelTraceEntry {uint64_t time,event,a,b,c,d,e;};
+ static Display13PanelTraceEntry display13PanelTraceRing[400];
+ static volatile uint32_t display13PanelTraceCount;
++// Rolling ring for later events (sleep/wake); per-frame VBL events excluded.
++static Display13PanelTraceEntry display13PanelRecentRing[512];
++static volatile uint32_t display13PanelRecentCount;
+ void XE::display13PanelTrace(uint32_t event,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e) {
+  if(!callbackXE || !callbackXE->display13PanelDP)return;
++ const auto now=mach_absolute_time();
++ if(event!=31 && event!=32) {
++  const auto r=__sync_fetch_and_add(&display13PanelRecentCount,1);
++  display13PanelRecentRing[r%arrsize(display13PanelRecentRing)]={now,event,a,b,c,d,e};
++  if(event!=5 || !(r&15)) {
++   auto root=IORegistryEntry::getRegistryRoot();
++   root->setProperty("WEXPanelTraceRecent",display13PanelRecentRing,sizeof(display13PanelRecentRing));
++   root->setProperty("WEXPanelTraceRecentCount",r+1,32);
++  }
++ }
+  const auto n=__sync_fetch_and_add(&display13PanelTraceCount,1);
+  if(n>=arrsize(display13PanelTraceRing))return; // keep the boot-time prefix
+- display13PanelTraceRing[n]={mach_absolute_time(),event,a,b,c,d,e};
++ display13PanelTraceRing[n]={now,event,a,b,c,d,e};
+  if(event==5 && n>8)return;
+  IORegistryEntry::getRegistryRoot()->setProperty("WEXPanelTrace",display13PanelTraceRing,
+   sizeof(Display13PanelTraceEntry)*(n+1));
+diff --git a/tools/decode_panel_trace.py b/tools/decode_panel_trace.py
+index 9098184..abf190d 100644
+--- a/tools/decode_panel_trace.py
++++ b/tools/decode_panel_trace.py
+@@ -67,11 +67,21 @@ def describe(ev, a, b, c, d, e):
+ 
+ def main():
+     text = open(sys.argv[1]).read()
+-    m = re.search(r'"WEXPanelTrace" = <([0-9a-f]*)>', text)
++    recent = "--recent" in sys.argv
++    m = re.search(r'"%s" = <([0-9a-f]*)>' % ("WEXPanelTraceRecent" if recent else "WEXPanelTrace"), text)
+     if not m:
+         print("no trace")
+         return
+     raw = bytes.fromhex(m.group(1))
++    if recent:
++        # Rolling ring: rotate so the oldest surviving entry comes first.
++        c = re.search(r'"WEXPanelTraceRecentCount" = ([0-9]+)', text)
++        count, slots = (int(c.group(1)) if c else 0), len(raw) // 56
++        if count > slots:
++            start = (count % slots) * 56
++            raw = raw[start:] + raw[:start]
++        else:
++            raw = raw[:count * 56]
+     t0 = None
+     noise = re.compile(r"attr=(thrm| gdc|pcnt|lddc|asns|hddc)")
+     for i in range(len(raw) // 56):

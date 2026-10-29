@@ -1,0 +1,339 @@
+From a8d5059c2cb598ff0a1608d4a67758dcd8279df8 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 05:43:03 +0530
+Subject: [PATCH 01/47] Capture ADL-P firmware eDP state in -wex-adlp-readout
+
+Record transcoder/PPS/backlight/PSR/PLL/Combo PHY A registers, the VBT
+and sink DPCD (native AUX reads on an idle, powered AUX A) so Display13
+eDP bring-up can be designed from real firmware state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                               |   2 +-
+ README_ja.md                            |   2 +-
+ WhateverXe/kern_adlp_edp_readout.hpp    | 134 ++++++++++++++++++++++++
+ WhateverXe/kern_xe.cpp                  |   9 ++
+ tests/adlp_edp_readout.cpp              |  71 +++++++++++++
+ tests/adlp_load_only.py                 |   5 +-
+ tests/fixtures/boot_argument_names.json |   1 +
+ 7 files changed, 221 insertions(+), 3 deletions(-)
+ create mode 100644 WhateverXe/kern_adlp_edp_readout.hpp
+ create mode 100644 tests/adlp_edp_readout.cpp
+
+diff --git a/README.md b/README.md
+index bdbe504..2c6ee47 100644
+--- a/README.md
++++ b/README.md
+@@ -195,7 +195,7 @@ it also skips GPU resource probing while preserving the
+ framebuffer's independent boot-memory and MMIO checks. It does not enable an
+ otherwise unsupported display backend.
+ 
+-Temporary development diagnostic: `-wex-adlp-readout` captures ADL-P boot resources while keeping GPU driver admission disabled. It is not required for supported hardware.
++Temporary development diagnostic: `-wex-adlp-readout` captures ADL-P boot resources while keeping GPU driver admission disabled. It is not required for supported hardware. It also records the firmware-programmed eDP path (transcoder, PPS, backlight, PSR, PLL and Combo PHY A registers), the VBT, and sink DPCD read over an idle AUX A; add `-wex-adlp-readout-noaux` to skip the DPCD reads.
+ `-wex-adlp-load-only` blocks both native framebuffer and accelerator probes/starts on a selected ADL-P/RPL-P device, for load-only diagnostics without GPU initialization.
+ `-wex-display13-offline` keeps native display controller initialization enabled on Alder Lake-N / Twin Lake and Alder Lake-H/P/U / Raptor Lake-H/P/U but reports selected outputs as disconnected, isolating HPD/EDID and mode programming for framebuffer diagnostics. It does not establish display operation.
+ 
+diff --git a/README_ja.md b/README_ja.md
+index 81291d2..3bf2903 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -142,7 +142,7 @@ FBの立上げ時は、任意の`-wex-noaccel`引数でAcceleratorの起動を
+ Alder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/UではGPU資源のprobeも省略し、FB独自の起動メモリ・MMIOの確認は維持します。
+ 未対応のDisplayバックエンドを有効にする引数ではありません。
+ 
+-開発時の一時診断用に `-wex-adlp-readout` を指定すると、GPUドライバの受付を閉じたままADL-Pの起動資源を採取します。対応済みハードウェアでは不要です。
++開発時の一時診断用に `-wex-adlp-readout` を指定すると、GPUドライバの受付を閉じたままADL-Pの起動資源を採取します。対応済みハードウェアでは不要です。ファームウェアが設定したeDP経路（トランスコーダ、PPS、バックライト、PSR、PLL、Combo PHY Aのレジスタ）とVBT、およびアイドル状態のAUX A経由で読み出したシンクのDPCDも記録します。DPCDの読み出しを省くには `-wex-adlp-readout-noaux` を追加します。
+ `-wex-adlp-load-only` は選択済みADL-P/RPL-Pで、FramebufferとAccelerator両方のnative probe/startを止め、GPUを初期化せずにロード段階を診断します。
+ `-wex-display13-offline` はAlder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/Uのnative display controller初期化を有効に保ち、選択した出力を未接続として扱います。FB診断でHPD/EDIDとmode設定を切り離すための設定で、表示成立を意味しません。
+ 
+diff --git a/WhateverXe/kern_adlp_edp_readout.hpp b/WhateverXe/kern_adlp_edp_readout.hpp
+new file mode 100644
+index 0000000..3c377f8
+--- /dev/null
++++ b/WhateverXe/kern_adlp_edp_readout.hpp
+@@ -0,0 +1,134 @@
++// ADL-P eDP boot readout: firmware-programmed panel path facts for the
++// -wex-adlp-readout diagnostic. Register offsets from Linux v6.12
++// intel_display_regs/intel_pps_regs/intel_backlight_regs/intel_psr_regs and
++// intel_dp_aux_regs. No pipe, PLL, PPS or backlight state is modified.
++// The only writes are native AUX DPCD reads on an idle, powered AUX A.
++#ifndef KERN_ADLP_EDP_READOUT_HPP
++#define KERN_ADLP_EDP_READOUT_HPP
++#include <stdint.h>
++#include <stddef.h>
++namespace ADLPEDPReadout {
++// Pipe/transcoder A, DDI A, PPS 0, backlight controllers 0/1, PSR on
++// transcoder A, DPLL0/1 and DDI A clock routing, Combo PHY A.
++constexpr uint32_t Registers[] {
++    // Transcoder A timings, M/N, DDI function, MSA, DP transport.
++    0x60000,0x60004,0x60008,0x6000C,0x60010,0x60014,0x6001C,
++    0x60030,0x60034,0x60040,0x60044,0x60400,0x60404,0x60410,0x60540,0x60544,
++    // Pipe A configuration, primary plane A control/stride/surface/size.
++    0x70008,0x70030,0x70180,0x70188,0x7019C,0x70190,0x70198,
++    // PSR1/PSR2 on transcoder A.
++    0x60800,0x60840,0x60900,0x60940,
++    // DDI A buffer and AUX A control.
++    0x64000,0x64010,
++    // Power wells: PW1/2 and DDI/AUX IO.
++    0x45404,0x45444,0x45454,
++    // CDCLK, DPLL0/1 enable, DPCLKA_CFGCR0, DPLL0/1 CFGCR0/1.
++    0x46000,0x46010,0x46014,0x164280,0x164284,0x164288,0x16428C,0x164290,
++    // PPS 0: status, control, on/off delays, divisor.
++    0xC7200,0xC7204,0xC7208,0xC720C,0xC7210,
++    // Backlight controllers 0/1 (CNP-style): control, frequency, duty.
++    0xC8250,0xC8254,0xC8258,0xC8350,0xC8354,0xC8358,
++    // South chicken / utility pin.
++    0xC2000,0x48400,
++    // Combo PHY A: CL_DW5/DW10, COMP_DW0/1/3/8/9/10, lane 0..3 TX/PCS.
++    0x162014,0x162028,0x162100,0x162104,0x16210C,0x162120,0x162124,0x162128,
++    0x162804,0x162888,0x162890,0x162894,0x16289C,
++    0x162990,0x162A90,0x162B90,
++};
++constexpr unsigned RegisterCount=sizeof(Registers)/sizeof(Registers[0]);
++
++// DPCD windows captured with native AUX reads (16 bytes each).
++constexpr uint32_t Windows[] {
++    0x000,0x010,0x060,0x070,0x090,0x100,0x110,0x170,0x200,0x2002,
++    0x600,0x700,0x710,0x720,0x730,0x740,0x750,0x760,0x770,
++};
++constexpr unsigned WindowCount=sizeof(Windows)/sizeof(Windows[0]);
++
++enum class AuxStatus : uint8_t {Unread,Ack,Nack,Defer,Timeout,ReceiveError,Busy,NoPower,Short};
++struct Window {uint32_t address;uint8_t status,bytes,reserved[2];uint8_t data[16];};
++static_assert(sizeof(Window)==24,"published layout");
++
++struct Aux {
++    static constexpr uint32_t Control=0x64010,Data=0x64014;
++    static constexpr uint32_t Busy=1U<<31,Done=1U<<30,TimeoutError=1U<<28,ReceiveError=1U<<25;
++    static constexpr uint32_t TBT=1U<<11;
++    // Linux v6.12 skl_get_aux_send_ctl with max timeout and the
++    // 18/26-cycle firmware/hardware sync lengths.
++    static constexpr uint32_t send(uint32_t bytes) {
++        return Busy|Done|TimeoutError|(3U<<26)|ReceiveError|((bytes&31)<<20)|(17U<<5)|25U;
++    }
++    template<class IO> static AuxStatus transfer(IO &io,const uint8_t *tx,uint32_t txBytes,
++                                                 uint8_t *rx,uint32_t &rxBytes) {
++        rxBytes=0;
++        if(txBytes<1 || txBytes>20)return AuxStatus::Short;
++        const auto before=io.read(Control);
++        if(before==UINT32_MAX || (before&Busy))return AuxStatus::Busy;
++        if(before&TBT)return AuxStatus::Busy; // not a combo-routed AUX
++        for(unsigned w=0;w<5;++w) {
++            uint32_t v=0;
++            for(unsigned b=0;b<4;++b) {
++                const auto i=4*w+b;
++                v|=uint32_t(i<txBytes ? tx[i] : 0)<<(24-8*b);
++            }
++            io.write(Data+4*w,v);
++        }
++        io.write(Control,send(txBytes));
++        uint32_t status=Busy;
++        for(unsigned spin=0;spin<200 && (status&Busy);++spin){io.delay();status=io.read(Control);}
++        // Acknowledge DONE/error status as Linux does after each transfer.
++        io.write(Control,status&(Done|TimeoutError|ReceiveError));
++        if(status&Busy)return AuxStatus::Timeout;
++        if(status&TimeoutError)return AuxStatus::Timeout;
++        if(status&ReceiveError)return AuxStatus::ReceiveError;
++        auto n=(status>>20)&31;
++        if(!n || n>20)return AuxStatus::Short;
++        for(unsigned i=0;i<n;++i) {
++            const auto v=io.read(Data+4*(i/4));
++            rx[i]=uint8_t(v>>(24-8*(i%4)));
++        }
++        rxBytes=n;
++        return AuxStatus::Ack;
++    }
++    template<class IO> static AuxStatus read(IO &io,uint32_t address,uint8_t *out,uint8_t &bytes) {
++        bytes=0;
++        const uint8_t tx[4] {uint8_t(0x90|((address>>16)&15)),uint8_t(address>>8),uint8_t(address),15};
++        for(unsigned attempt=0;attempt<7;++attempt) {
++            uint8_t rx[20] {};uint32_t n=0;
++            const auto s=transfer(io,tx,4,rx,n);
++            if(s!=AuxStatus::Ack)return s;
++            const auto reply=(rx[0]>>4)&3;
++            if(reply==2){for(unsigned i=0;i<5;++i)io.delay();continue;}
++            if(reply==1)return AuxStatus::Nack;
++            bytes=uint8_t(n-1);
++            for(unsigned i=0;i+1<n && i<16;++i)out[i]=rx[i+1];
++            return AuxStatus::Ack;
++        }
++        return AuxStatus::Defer;
++    }
++};
++
++struct Result {
++    uint32_t version {1},auxBefore {},auxPower {},windowsRead {};
++    uint32_t registers[RegisterCount][2] {};
++    Window windows[WindowCount] {};
++};
++
++// IO: read/write/delay (delay ~100us). AUX is attempted only when the AUX A
++// power well reports enabled and the controller is idle and combo-routed.
++template<class IO> void capture(IO &io,Result &r,bool dpcd) {
++    for(unsigned i=0;i<RegisterCount;++i){r.registers[i][0]=Registers[i];r.registers[i][1]=io.read(Registers[i]);}
++    r.auxPower=io.read(0x45444);r.auxBefore=io.read(Aux::Control);
++    for(unsigned i=0;i<WindowCount;++i)r.windows[i].address=Windows[i];
++    if(!dpcd)return;
++    const bool powered=r.auxPower!=UINT32_MAX && (r.auxPower&1);
++    for(unsigned i=0;i<WindowCount;++i) {
++        auto &w=r.windows[i];
++        if(!powered){w.status=uint8_t(AuxStatus::NoPower);continue;}
++        uint8_t n=0;
++        w.status=uint8_t(Aux::read(io,w.address,w.data,n));w.bytes=n;
++        if(w.status==uint8_t(AuxStatus::Ack))++r.windowsRead;
++        else if(w.status==uint8_t(AuxStatus::Busy) || w.status==uint8_t(AuxStatus::Timeout))break;
++    }
++}
++}
++#endif
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 60fb049..1409ed0 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -44,6 +44,7 @@
+ #include "kern_tgl_combo_signal.hpp"
+ #include "kern_tgl_panel_depth.hpp"
+ #include "kern_xelp_panel_power.hpp"
++#include "kern_adlp_edp_readout.hpp"
+ #include "kern_tgl_pcode_gate.hpp"
+ #include "kern_tgl_pcode_edram.hpp"
+ #include "kern_tgl_tc_cold.hpp"
+@@ -4255,11 +4256,19 @@ void XE::processKernel(KernelPatcher &patcher, DeviceInfo *info) {
+             physicalGPU->setProperty("ADLPDisplayBoot",registers,sizeof(registers));
+             auto display=AlderLakeN::readDisplay(io,true);
+             physicalGPU->setProperty("ADLPScanoutBoot",&display,sizeof(display));
++            // ADLP_EDP_READOUT: firmware eDP path, PPS/backlight/PSR and sink DPCD.
++            static ADLPEDPReadout::Result edp;
++            ADLPEDPReadout::capture(io,edp,!checkKernelArgument("-wex-adlp-readout-noaux"));
++            physicalGPU->setProperty("ADLPEDPBoot",&edp,sizeof(edp));
++            SYSLOG("igfx","ADL-P eDP readout aux=%x power=%x dpcd=%u/%u",edp.auxBefore,edp.auxPower,
++                edp.windowsRead,ADLPEDPReadout::WindowCount);
++            // ADLP_EDP_READOUT_END
+             SYSLOG("igfx","ADL-P readout status=%u fuses=%x/%x/%x/%x/%x release=%x/%x; donor blocked",
+                 static_cast<unsigned>(gt.status),gt.fuses[0],gt.fuses[1],gt.fuses[2],gt.fuses[3],gt.fuses[4],
+                 gt.releasedMask,gt.releaseFailedMask);
+         }
+         if(map)map->release();
++        xelpReadFirmware(physicalGPU); // VBT/OpRegion only; publishes TGLVBT
+         return;
+     }
+     if(display12SmallGTDetected && XELP::display12SmallGTDevice(xeProfile.identity) &&
+diff --git a/tests/adlp_edp_readout.cpp b/tests/adlp_edp_readout.cpp
+new file mode 100644
+index 0000000..88e478f
+--- /dev/null
++++ b/tests/adlp_edp_readout.cpp
+@@ -0,0 +1,71 @@
++#include <cassert>
++#include <cstdio>
++#include <map>
++#include <vector>
++#include "kern_adlp_edp_readout.hpp"
++using namespace ADLPEDPReadout;
++// Synthetic AUX sink: answers native reads from a DPCD map, optionally
++// deferring once, and records every control write.
++struct IO {
++    std::map<uint32_t,uint32_t> regs;
++    std::map<uint32_t,uint8_t> dpcd;
++    std::vector<uint32_t> controls;
++    unsigned defers {};bool timeout {};
++    uint32_t read(uint32_t reg) {return regs.count(reg) ? regs[reg] : 0;}
++    void delay() {}
++    void write(uint32_t reg,uint32_t v) {
++        if(reg!=Aux::Control){regs[reg]=v;return;}
++        controls.push_back(v);
++        if(!(v&Aux::Busy)){regs[reg]&=~(v&(Aux::Done|Aux::TimeoutError|Aux::ReceiveError));return;}
++        assert(((v>>20)&31)==4 && !(v&Aux::TBT) && (v&31)==25 && ((v>>5)&31)==17 && ((v>>26)&3)==3);
++        if(timeout){regs[reg]=Aux::Done|Aux::TimeoutError;return;}
++        const auto h=regs[Aux::Data];
++        assert((h>>28)==9);
++        const auto address=(h>>8)&0xFFFFF,len=(h&0xFF)+1;
++        uint8_t rx[20] {};uint32_t n=1;
++        if(defers){--defers;rx[0]=0x20;}
++        else for(uint32_t i=0;i<len;++i)rx[n++]=dpcd.count(address+i) ? dpcd[address+i] : 0;
++        for(unsigned w=0;w<5;++w) {
++            uint32_t d=0;for(unsigned b=0;b<4;++b)d|=uint32_t(rx[4*w+b])<<(24-8*b);
++            regs[Aux::Data+4*w]=d;
++        }
++        regs[reg]=Aux::Done|(n<<20);
++    }
++};
++int main() {
++    {
++        IO io;io.regs[0x45444]=3;io.regs[0x64000]=0x80000001;io.defers=1;
++        for(uint32_t i=0;i<16;++i){io.dpcd[0x000+i]=uint8_t(0x14+i);io.dpcd[0x700+i]=uint8_t(0xA0+i);}
++        Result r;capture(io,r,true);
++        assert(r.windowsRead==WindowCount && r.registers[0][0]==0x60000);
++        bool sawDdi=false;for(auto &x:r.registers)if(x[0]==0x64000){sawDdi=x[1]==0x80000001;}
++        assert(sawDdi);
++        assert(r.windows[0].status==uint8_t(AuxStatus::Ack) && r.windows[0].bytes==16 &&
++            r.windows[0].data[0]==0x14 && r.windows[0].data[15]==0x23);
++        assert(r.windows[11].address==0x700 && r.windows[11].data[0]==0xA0 && r.windows[11].data[2]==0xA2);
++        // Every send is followed by a status acknowledge without SEND_BUSY.
++        for(size_t i=0;i<io.controls.size();i+=2)assert((io.controls[i]&Aux::Busy) && !(io.controls[i+1]&Aux::Busy));
++    }
++    {
++        // Unpowered AUX: registers only, no AUX writes.
++        IO io;io.regs[0x45444]=2;Result r;capture(io,r,true);
++        assert(!r.windowsRead && io.controls.empty() && r.windows[0].status==uint8_t(AuxStatus::NoPower));
++    }
++    {
++        // Busy controller (firmware command in flight) is never touched.
++        IO io;io.regs[0x45444]=1;io.regs[Aux::Control]=Aux::Busy;Result r;capture(io,r,true);
++        assert(!r.windowsRead && io.controls.empty() && r.windows[0].status==uint8_t(AuxStatus::Busy));
++    }
++    {
++        // Timeout stops the window sweep after the first failure.
++        IO io;io.regs[0x45444]=1;io.timeout=true;Result r;capture(io,r,true);
++        assert(!r.windowsRead && io.controls.size()==2 && r.windows[0].status==uint8_t(AuxStatus::Timeout) &&
++            r.windows[1].status==uint8_t(AuxStatus::Unread));
++    }
++    {
++        // -wex-adlp-readout-noaux: registers only.
++        IO io;io.regs[0x45444]=1;Result r;capture(io,r,false);
++        assert(io.controls.empty() && !r.windowsRead);
++    }
++    puts("adlp_edp_readout ok");
++}
+diff --git a/tests/adlp_load_only.py b/tests/adlp_load_only.py
+index f9c61bb..0a3a625 100644
+--- a/tests/adlp_load_only.py
++++ b/tests/adlp_load_only.py
+@@ -19,6 +19,7 @@ code=r'''
+ #include "kern_xelp_os.hpp"
+ #include "kern_alderlake_n.hpp"
+ #include "kern_xelp_gt_resources.hpp"
++#include "kern_adlp_edp_readout.hpp"
+ using mach_vm_address_t=uintptr_t;
+ #define arrsize(a) (sizeof(a)/sizeof((a)[0]))
+ #define SYSLOG(...) do{}while(0)
+@@ -62,6 +63,7 @@ struct XE {
+  bool adlpLoadOnly=false,adlpDisplaySelected=false;XELP::Profile xeProfile;unsigned initialized=0;
+  DiagnosticGPU *physicalGPU=nullptr;
+  void select(){SELECTION ++initialized;}
++ unsigned firmwareReads=0;void xelpReadFirmware(DiagnosticGPU *){++firmwareReads;}
+  void diagnose(){DIAGNOSTIC ++initialized;}
+  bool processADLPLoadOnly(KernelPatcher &,size_t,mach_vm_address_t,size_t);
+  static IOService *rejectADLPFramebufferProbe(IOService *,IOService *,SInt32 *);
+@@ -81,7 +83,8 @@ int main(){
+   XE xe;DiagnosticGPU gpu;gpu.command=powered?2:0;xe.physicalGPU=&gpu;readout=enabled;
+   xe.xeProfile=XELP::identify((physical<<16)|0x8086,12);xe.diagnose();
+   const bool blocked=enabled && physical!=0x4c8a;
+-  assert(xe.adlpLoadOnly==blocked && xe.initialized==!blocked && gpu.maps==unsigned(blocked&&powered));++cases;
++  assert(xe.adlpLoadOnly==blocked && xe.initialized==!blocked && gpu.maps==unsigned(blocked&&powered));
++  assert(xe.firmwareReads==unsigned(blocked&&powered));++cases;
+  }
+  readout=false;
+  for(unsigned index:{1U,2U})for(unsigned bad=0;bad<4;++bad){
+diff --git a/tests/fixtures/boot_argument_names.json b/tests/fixtures/boot_argument_names.json
+index afbfff4..ffa6ced 100644
+--- a/tests/fixtures/boot_argument_names.json
++++ b/tests/fixtures/boot_argument_names.json
+@@ -137,6 +137,7 @@
+   "-wex-noaccel": [],
+   "-wex-display-trace": [],
+   "-wex-adlp-readout": [],
++  "-wex-adlp-readout-noaux": [],
+   "-wex-adlp-load-only": [],
+   "-wex-display13-offline": []
+ }

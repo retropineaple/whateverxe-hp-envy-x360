@@ -1,0 +1,66 @@
+From 4ee1544832af695de3bd8b23f8118854b6616339 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 20:29:15 +0530
+Subject: [PATCH 33/47] Panel diagnostics: publish firmware DSDT/SSDTs in
+ -wex-adlp-edp mode
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_host.cpp  | 20 ++++++++++++++++++++
+ tests/host_publication.py |  1 +
+ 2 files changed, 21 insertions(+)
+
+diff --git a/WhateverXe/kern_host.cpp b/WhateverXe/kern_host.cpp
+index f42e20a..cf0f97b 100644
+--- a/WhateverXe/kern_host.cpp
++++ b/WhateverXe/kern_host.cpp
+@@ -6,6 +6,8 @@
+ #include <Headers/kern_api.hpp>
+ #include <Headers/kern_iokit.hpp>
+ #include <IOKit/pci/IOPCIDevice.h>
++#include <IOKit/acpi/IOACPIPlatformDevice.h>
++static void dumpPanelACPITables();
+ XeHost *XeHost::callbackHost;
+ struct FramebufferViewer : public IOFramebuffer {
+  static IOMemoryMap *&getVramMap(IOFramebuffer *fb) { return static_cast<FramebufferViewer *>(fb)->fVramMap; }
+@@ -75,6 +77,7 @@ void XeHost::processKernel(KernelPatcher &patcher) {
+ void XeHost::processKext(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
+  if(!active)return;
+  if(backlight.loadIndex==index) {
++  if(backlightPanelEDP)dumpPanelACPITables();
+   if(backlightEnabled) {
+    KernelPatcher::RouteRequest route("__ZN15AppleIntelPanel10setDisplayEP9IODisplay",wrapPanelSetDisplay,orgPanelSetDisplay);
+    const bool ready=patcher.routeMultiple(index,&route,1,address,size);
+@@ -216,3 +219,20 @@ void XeHost::wrapFramebufferInit(IOFramebuffer *fb) {
+ 	}
+ }
+ 
++
++// -wex-adlp-edp diagnostics: publish the firmware DSDT/SSDTs (read-only) so the
++// brightness-key notify target can be found; macOS no longer exposes them.
++static void dumpPanelACPITables() {
++ // Name-based checks only: WhateverXe does not link against IOACPIFamily.
++ auto entry=IORegistryEntry::fromPath("/_SB",IORegistryEntry::getPlane("IOACPIPlane"));
++ if(!entry)return;
++ if(!entry->metaCast("IOACPIPlatformDevice")){entry->release();return;}
++ auto sb=static_cast<IOACPIPlatformDevice *>(entry);
++ auto root=IORegistryEntry::getRegistryRoot();
++ if(auto dsdt=sb->getACPITableData("DSDT",0))root->setProperty("WEXACPI-DSDT",const_cast<OSData *>(dsdt));
++ for(unsigned i=0;i<32;++i) {
++  auto ssdt=sb->getACPITableData("SSDT",i);if(!ssdt)break;
++  char key[24];snprintf(key,sizeof(key),"WEXACPI-SSDT-%u",i);root->setProperty(key,const_cast<OSData *>(ssdt));
++ }
++ sb->release();
++}
+diff --git a/tests/host_publication.py b/tests/host_publication.py
+index 5c95b67..f4dd6eb 100644
+--- a/tests/host_publication.py
++++ b/tests/host_publication.py
+@@ -47,6 +47,7 @@ namespace XeDataAccess {bool processKext(KernelPatcher&,size_t,mach_vm_address_t
+ struct Graphics {size_t loadIndex=4;bool off=false;void switchOff(){off=true;}} graphics;
+ struct {size_t loadIndex=5;}backlight;
+ static bool checkKernelArgument(const char *){return false;}
++static void dumpPanelACPITables(){}
+ struct XeHost {
+  bool active=false,backlightEnabled=false,backlightPanelEDP=false;enum {FB_DETECT,FB_RESET,FB_COPY,FB_ZEROFILL,FB_NONE,FB_TOTAL};uint32_t resetFramebuffer=FB_NONE;
+  IOPCIDevice *backlightGPU=nullptr;

@@ -1,0 +1,188 @@
+From 22afffa99b68affc84e0e22f3f0ffe00ba0dd207 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 13:31:10 +0530
+Subject: [PATCH 12/47] Resolve the adopted boot mode to the matching EDID mode
+
+enableController leaves an adopted online FB in kIOFBBootProgrammable and
+getCurrentDisplayMode only replaces it on an exact hardware/EDID timing
+match, which fails on the Combo DP panel route; CoreDisplay then cannot
+describe the mode and keeps the panel offline. Pick the EDID mode whose
+active size matches the live transcoder. Enlarge the trace ring, keep
+only connection-state attributes, and add a trace decoder.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp      | 45 +++++++++++++++++++++--
+ WhateverXe/kern_xe.hpp      |  2 ++
+ tools/decode_panel_trace.py | 71 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 115 insertions(+), 3 deletions(-)
+ create mode 100644 tools/decode_panel_trace.py
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 8c7b654..d911288 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -7043,7 +7043,7 @@ void XE::display13AUXFailRecord(void *port,uint32_t result,uint32_t command) {
+ // {mach time, event, a..e}. Published after every event except AUX failures,
+ // which are throttled by their own recorder.
+ struct Display13PanelTraceEntry {uint64_t time,event,a,b,c,d,e;};
+-static Display13PanelTraceEntry display13PanelTraceRing[160];
++static Display13PanelTraceEntry display13PanelTraceRing[400];
+ static volatile uint32_t display13PanelTraceCount;
+ void XE::display13PanelTrace(uint32_t event,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e) {
+  if(!callbackXE || !callbackXE->display13PanelDP)return;
+@@ -7108,6 +7108,39 @@ uint32_t XE::wrapPanelConnectionProbe(IOService *fb) {
+  if(before!=after || restore)display13PanelTrace(24,display13FBState(fb),before|(uint64_t(after)<<8)|(uint64_t(restore)<<16),r,policy,link);
+  return r;
+ }
++// enableController starts an adopted online FB in kIOFBBootProgrammable
++// (-5). getCurrentDisplayMode replaces it only when the hardware timing it
++// reconstructs matches an EDID mode exactly; on this route it does not, and
++// CoreDisplay then cannot describe the mode and leaves the panel offline.
++// Select the EDID mode whose active size matches the live transcoder.
++uint32_t XE::wrapPanelCurrentMode(IOService *fb,int *mode,int *depth) {
++ const auto r=FunctionCast(wrapPanelCurrentMode,callbackXE->orgPanelCurrentMode)(fb,mode,depth);
++ if(r || !fb || fb->getMetaClass()->getClassSize()<0x4B90 || Display13FBMemory::field<int32_t>(fb,0x4250)!=-5 ||
++    Display13FBMemory::field<uint32_t>(fb,0x1DC)!=0 || !Display13FBMemory::field<uint8_t>(fb,0x1E0))return r;
++ auto &c=display13FBPower;if(!c.map || !c.map->getVirtualAddress())return r;
++ Display13FBSSTIO io{c.map};
++ const auto ht=io.read(0x60000),vt=io.read(0x6000C);
++ if(ht==UINT32_MAX || vt==UINT32_MAX || !(io.read(0x60400)&0x80000000U))return r;
++ const uint32_t width=(ht&0x3FFF)+1,height=(vt&0x3FFF)+1;
++ auto list=OSDynamicCast(OSArray,Display13FBMemory::field<OSObject *>(fb,0x4260));
++ uint64_t first[4] {UINT64_MAX,UINT64_MAX,UINT64_MAX,UINT64_MAX};
++ int32_t chosen=-5;unsigned count=list?list->getCount():0;
++ for(unsigned i=0;i<count;++i) {
++  auto data=OSDynamicCast(OSData,list->getObject(i));
++  if(!data || data->getLength()<0x58)continue;
++  auto b=static_cast<const uint8_t *>(data->getBytesNoCopy());
++  const int32_t id=*reinterpret_cast<const int32_t *>(b);
++  const uint32_t h=*reinterpret_cast<const uint32_t *>(b+0x40),v=*reinterpret_cast<const uint32_t *>(b+0x50);
++  if(i==0){first[0]=uint32_t(id);first[1]=*reinterpret_cast<const uint64_t *>(b+0x28);first[2]=(uint64_t(h)<<32)|v;
++   first[3]=(uint64_t(*reinterpret_cast<const uint32_t *>(b+0x18))<<32)|*reinterpret_cast<const uint32_t *>(b+0x1C);}
++  if(h==width && v==height){chosen=id;break;}
++ }
++ display13PanelTrace(25,(uint64_t(width)<<32)|height,count,uint32_t(chosen),first[1],first[2]);
++ if(chosen==-5)return r;
++ *reinterpret_cast<int32_t *>(reinterpret_cast<uint8_t *>(fb)+0x4250)=chosen;
++ if(mode)*mode=chosen;
++ return r;
++}
+ bool XE::processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
+  const char *changed="__ZN21AppleIntelFramebuffer17connectionChangedEv";
+  const char *online="__ZN21AppleIntelFramebuffer13getOnlineInfoEP21AppleIntelDisplayPathPhS2_";
+@@ -7121,8 +7154,13 @@ bool XE::processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_
+  const uint8_t probeEntry[]={0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x48,0x83,0xec,0x10};
+  const auto p=patcher.solveSymbol<mach_vm_address_t>(index,probe,address,size);patcher.clearError();
+  if(p!=address+0x2DDF0 || memcmp(reinterpret_cast<void *>(p),probeEntry,sizeof(probeEntry)))return false;
++ const char *current="__ZN21AppleIntelFramebuffer21getCurrentDisplayModeEPiS0_";
++ const uint8_t currentEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xa8,0,0,0};
++ const auto m=patcher.solveSymbol<mach_vm_address_t>(index,current,address,size);patcher.clearError();
++ if(m!=address+0x32A88 || memcmp(reinterpret_cast<void *>(m),currentEntry,sizeof(currentEntry)))return false;
+  KernelPatcher::RouteRequest routes[]={{changed,wrapPanelConnectionChanged,orgPanelConnectionChanged},
+-  {online,wrapPanelGetOnlineInfo,orgPanelGetOnlineInfo},{probe,wrapPanelConnectionProbe,orgPanelConnectionProbe}};
++  {online,wrapPanelGetOnlineInfo,orgPanelGetOnlineInfo},{probe,wrapPanelConnectionProbe,orgPanelConnectionProbe},
++  {current,wrapPanelCurrentMode,orgPanelCurrentMode}};
+  const bool ok=patcher.routeMultipleShort(index,routes,arrsize(routes),address,size);patcher.clearError();
+  IORegistryEntry::getRegistryRoot()->setProperty("WEXPanelTraceReady",ok);
+  // IntelFBClientControl::doAttribute forwards AGDC's per-FB online request to
+@@ -8039,7 +8077,8 @@ uint32_t XE::wrapAlderLakeNConnectionAttr(IOService *fb,int connection,uint32_t
+     adlnFrontendSnapshot(fb,r);adlnPublishFrontend("Attr","Entry",r);
+     const auto result=FunctionCast(wrapAlderLakeNConnectionAttr,callbackXE->orgAlderLakeNConnectionAttr)(fb,connection,attribute,value);
+     r[5]=result;r[6]=!result && value ? *value : 0;adlnFrontendSnapshot(fb,r);adlnPublishFrontend("Attr","Last",r);
+-    display13PanelTrace(1,r[2],attribute,result,r[6],display13FBState(fb));
++    if(attribute=='enab' || attribute=='cena' || attribute=='chng' || attribute=='flgs')
++        display13PanelTrace(1,r[2],attribute,result,r[6],display13FBState(fb));
+     if(attribute=='cena' || attribute=='enab' || attribute=='flgs') {
+         char key[64];snprintf(key,sizeof(key),"N97FBAttr%u_%08x",static_cast<uint32_t>(r[2]),attribute);
+         IORegistryEntry::getRegistryRoot()->setProperty(key,r,sizeof(r));
+diff --git a/WhateverXe/kern_xe.hpp b/WhateverXe/kern_xe.hpp
+index 32c92ce..13efba0 100644
+--- a/WhateverXe/kern_xe.hpp
++++ b/WhateverXe/kern_xe.hpp
+@@ -183,6 +183,8 @@ private:
+  bool processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size);
+  mach_vm_address_t orgPanelConnectionChanged {},orgPanelGetOnlineInfo {},orgPanelConnectionProbe {};
+  static uint32_t wrapPanelConnectionProbe(IOService *fb);
++ mach_vm_address_t orgPanelCurrentMode {};
++ static uint32_t wrapPanelCurrentMode(IOService *fb,int *mode,int *depth);
+  static uint32_t wrapPanelConnectionChanged(IOService *fb);
+  static uint32_t wrapPanelGetOnlineInfo(IOService *fb,void *path,uint8_t *online,uint8_t *info);
+  static bool display13HDMIPort(void *port);
+diff --git a/tools/decode_panel_trace.py b/tools/decode_panel_trace.py
+new file mode 100644
+index 0000000..c306fb6
+--- /dev/null
++++ b/tools/decode_panel_trace.py
+@@ -0,0 +1,71 @@
++#!/usr/bin/env python3
++"""Decode the -wex-adlp-edp WEXPanelTrace ring from an `ioreg -l -d1` dump."""
++import re, struct, sys
++
++NAMES = {1: "attr", 4: "probe", 5: "AUXFAIL", 6: "enablePort", 7: "disablePort", 8: "trainPat",
++         9: "clkOn", 10: "clkOff", 11: "DDC", 20: "connChg>", 21: "connChg<", 22: "online>",
++         23: "online<", 24: "connProbe", 25: "curMode", 30: "bootAdopt"}
++ALL = (1 << 64) - 1
++
++
++def fb(v):
++    if v == ALL:
++        return "-"
++    return "fb%d on=%d e1=%d e2=%d e4=%d e6=%d f=%x" % (
++        v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff, (v >> 32) & 0xff, (v >> 40) & 0xff, v >> 48)
++
++
++def link(v):
++    return "-" if v == ALL else "buf=%08x func=%08x" % (v & 0xffffffff, v >> 32)
++
++
++def describe(ev, a, b, c, d, e):
++    if ev == 1:
++        return "fb=%d attr=%s res=%x val=%x %s" % (a, b.to_bytes(4, "big").decode("latin1"), c, d, fb(e))
++    if ev in (20, 22):
++        return "%s %s" % (fb(a), link(b))
++    if ev == 21:
++        return "%s %s ret=%x" % (fb(a), link(b), c)
++    if ev == 23:
++        return "%s online=%x ret=%x port=%x %s" % (fb(a), b, c, d, link(e))
++    if ev == 24:
++        return "%s before=%d after=%d restored=%d ret=%x fbcount=%d e54=%d e55=%d e56=%d %s" % (
++            fb(a), b & 0xff, (b >> 8) & 0xff, (b >> 16) & 1, c, d & 0xff, (d >> 8) & 0xff, (d >> 16) & 0xff,
++            (d >> 24) & 0xff, link(e))
++    if ev == 25:
++        return "live=%dx%d modes=%d chosen=%x first.pclk=%d first=%dx%d" % (a >> 32, a & 0xffffffff, b, c, d, e >> 32, e & 0xffffffff)
++    if ev == 4:
++        return "ddi=%d res=%x mode=%d conn=%d %s" % (a, b, c, d, link(e))
++    if ev == 11:
++        return "block=%d res=%x ddi=%d %s" % (a, b, c, link(d))
++    if ev == 5:
++        return "n=%d res=%x cmd=%x ctl=%08x buf=%08x" % (a, b, c, d, e)
++    if ev in (6, 7, 9, 10):
++        return "ddi=%d %s" % (a, link(c))
++    if ev == 8:
++        return "pattern=%d %s" % (a, link(c))
++    if ev == 30:
++        return "status=%d adopted=%d %s" % (a, b, link(c))
++    return str((a, b, c, d, e))
++
++
++def main():
++    text = open(sys.argv[1]).read()
++    m = re.search(r'"WEXPanelTrace" = <([0-9a-f]*)>', text)
++    if not m:
++        print("no trace")
++        return
++    raw = bytes.fromhex(m.group(1))
++    t0 = None
++    noise = re.compile(r"attr=(thrm| gdc|pcnt|lddc|asns|hddc)")
++    for i in range(len(raw) // 56):
++        tm, ev, a, b, c, d, e = struct.unpack_from("<7Q", raw, i * 56)
++        t0 = tm if t0 is None else t0
++        line = describe(ev, a, b, c, d, e)
++        if "-v" not in sys.argv and ev == 1 and noise.search(line):
++            continue
++        print("%8.3f %-11s %s" % ((tm - t0) / 1e9, NAMES.get(ev, str(ev)), line))
++
++
++if __name__ == "__main__":
++    main()

@@ -1,0 +1,112 @@
+From 4b30ac51bc73b946b1ba2ddf631245b6f01c6031 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 15:10:14 +0530
+Subject: [PATCH 19/47] Describe the native panel mode before CoreDisplay
+ installs timings
+
+Before setDetailedTimings, validateDisplayMode cannot describe any mode,
+so IOAccelDisplayPipe::init_framebuffer_resource failed for FB0 and every
+later display pipe transaction was rejected. While FB0 has no list,
+validate 0x80001000 with the panel's EDID native timing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp      | 38 ++++++++++++++++++++++++++++++++++++-
+ WhateverXe/kern_xe.hpp      |  2 ++
+ tools/decode_panel_trace.py |  4 +++-
+ 3 files changed, 42 insertions(+), 2 deletions(-)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index f6ab72e..c8acd9f 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -7216,6 +7216,36 @@ void XE::display13ReplayVBL() {
+  const auto r=reinterpret_cast<uint32_t (*)(void *,void *,uint32_t,IOService *)>(display13OrgInterruptState)(p.controller,p.ref,p.state,p.fb);
+  display13PanelTrace(32,p.state,r,display13FBPathCount(p.fb),Display13FBMemory::field<uint32_t>(p.controller,0xE14));
+ }
++// Before CoreDisplay installs the EDID timings, the donor cannot describe
++// any mode, so IOAccelDisplayPipe::init_framebuffer_resource fails for FB0
++// and every later display pipe transaction is rejected. Describe the
++// panel's native EDID mode (the timing the firmware left running) as the
++// first detailed timing while FB0 has no list, like a real boot mode.
++static uint8_t display13NativeTiming[0xA0];
++static void display13BuildNativeTiming() {
++ auto t=display13NativeTiming;bzero(t,sizeof(display13NativeTiming));
++ const auto put32=[t](size_t off,uint32_t v){memcpy(t+off,&v,4);};
++ const auto put64=[t](size_t off,uint64_t v){memcpy(t+off,&v,8);};
++ const auto put16=[t](size_t off,uint16_t v){memcpy(t+off,&v,2);};
++ put32(0x00,0x80001000);                       // detailed-timing mode ID
++ put64(0x28,329630000ULL);put64(0x30,329630000ULL);put64(0x38,329630000ULL);
++ put32(0x40,2880);put32(0x44,80);put32(0x48,8);put32(0x4C,32);   // EDID DTD 1
++ put32(0x50,1800);put32(0x54,56);put32(0x58,6);put32(0x5C,8);
++ put32(0x80,1);                                 // one link
++ put16(0x88,1);put16(0x8A,2);put16(0x8C,1);put16(0x8E,1); // RGB444, 8 bpc, sRGB, full
++}
++uint32_t XE::wrapPanelValidateMode(IOService *fb,int mode,const void **desc,const void **timing) {
++ const auto r=FunctionCast(wrapPanelValidateMode,callbackXE->orgPanelValidateMode)(fb,mode,desc,timing);
++ if(!r || mode!=int(0x80001000) || !fb || fb->getMetaClass()->getClassSize()<0x4B90 ||
++    Display13FBMemory::field<uint32_t>(fb,0x1DC)!=0 || !Display13FBMemory::field<uint8_t>(fb,0x1E0))return r;
++ auto list=OSDynamicCast(OSArray,Display13FBMemory::field<OSObject *>(fb,0x4260));
++ if(list && list->getCount())return r;
++ static bool built;if(!built){display13BuildNativeTiming();built=true;}
++ if(desc)*desc=reinterpret_cast<const void *>(callbackXE->panelProgrammedMode);
++ if(timing)*timing=display13NativeTiming;
++ static uint32_t count;if(++count<=4)display13PanelTrace(33,uint32_t(mode),r,count);
++ return 0;
++}
+ bool XE::processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
+  const char *changed="__ZN21AppleIntelFramebuffer17connectionChangedEv";
+  const char *online="__ZN21AppleIntelFramebuffer13getOnlineInfoEP21AppleIntelDisplayPathPhS2_";
+@@ -7241,10 +7271,16 @@ bool XE::processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_
+  const uint8_t irqEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x38};
+  const auto q=patcher.solveSymbol<mach_vm_address_t>(index,irqSym,address,size);patcher.clearError();
+  if(q!=address+0x7229A || memcmp(reinterpret_cast<void *>(q),irqEntry,sizeof(irqEntry)))return false;
++ const char *validSym="__ZN21AppleIntelFramebuffer19validateDisplayModeEiPPKNS_15ModeDescriptionEPPK29IODetailedTimingInformationV2";
++ const uint8_t validEntry[]={0x55,0x48,0x89,0xe5,0x41,0x56,0x53};
++ const auto v=patcher.solveSymbol<mach_vm_address_t>(index,validSym,address,size);patcher.clearError();
++ const auto pm=patcher.solveSymbol<mach_vm_address_t>(index,"__ZL14programmedMode",address,size);patcher.clearError();
++ if(v!=address+0x30DE2 || pm!=address+0x98670 || memcmp(reinterpret_cast<void *>(v),validEntry,sizeof(validEntry)))return false;
++ panelProgrammedMode=pm;
+  KernelPatcher::RouteRequest routes[]={{changed,wrapPanelConnectionChanged,orgPanelConnectionChanged},
+   {online,wrapPanelGetOnlineInfo,orgPanelGetOnlineInfo},{probe,wrapPanelConnectionProbe,orgPanelConnectionProbe},
+   {current,wrapPanelCurrentMode,orgPanelCurrentMode},{timingSym,wrapPanelSetupTiming,orgPanelSetupTiming},
+-  {irqSym,wrapPanelInterruptState,orgPanelInterruptState}};
++  {irqSym,wrapPanelInterruptState,orgPanelInterruptState},{validSym,wrapPanelValidateMode,orgPanelValidateMode}};
+  const bool ok=patcher.routeMultipleShort(index,routes,arrsize(routes),address,size);patcher.clearError();
+  IORegistryEntry::getRegistryRoot()->setProperty("WEXPanelTraceReady",ok);
+  display13OrgInterruptState=ok ? orgPanelInterruptState : 0;
+diff --git a/WhateverXe/kern_xe.hpp b/WhateverXe/kern_xe.hpp
+index 2695306..d31d8ad 100644
+--- a/WhateverXe/kern_xe.hpp
++++ b/WhateverXe/kern_xe.hpp
+@@ -186,6 +186,8 @@ private:
+  mach_vm_address_t orgPanelCurrentMode {},orgPanelSetupTiming {},orgPanelInterruptState {};
+  static uint32_t wrapPanelInterruptState(void *controller,void *ref,uint32_t state,IOService *fb);
+  static void display13ReplayVBL();
++ mach_vm_address_t orgPanelValidateMode {},panelProgrammedMode {};
++ static uint32_t wrapPanelValidateMode(IOService *fb,int mode,const void **desc,const void **timing);
+  static void wrapPanelSetupTiming(IOService *fb,const void *timing,void *out);
+  static uint32_t wrapPanelCurrentMode(IOService *fb,int *mode,int *depth);
+  static uint32_t wrapPanelConnectionChanged(IOService *fb);
+diff --git a/tools/decode_panel_trace.py b/tools/decode_panel_trace.py
+index c4a0430..6fd42c5 100644
+--- a/tools/decode_panel_trace.py
++++ b/tools/decode_panel_trace.py
+@@ -4,7 +4,7 @@ import re, struct, sys
+ 
+ NAMES = {1: "attr", 4: "probe", 5: "AUXFAIL", 6: "enablePort", 7: "disablePort", 8: "trainPat",
+          9: "clkOn", 10: "clkOff", 11: "DDC", 20: "connChg>", 21: "connChg<", 22: "online>",
+-         23: "online<", 24: "connProbe", 25: "curMode", 26: "linkBW", 27: "setupTim", 28: "rateSel", 29: "rateCap", 30: "bootAdopt", 31: "irqState", 32: "vblReplay"}
++         23: "online<", 24: "connProbe", 25: "curMode", 26: "linkBW", 27: "setupTim", 28: "rateSel", 29: "rateCap", 30: "bootAdopt", 31: "irqState", 32: "vblReplay", 33: "bootMode"}
+ ALL = (1 << 64) - 1
+ 
+ 
+@@ -46,6 +46,8 @@ def describe(ev, a, b, c, d, e):
+         return "state=%#x res=%x paths=%d ctl.e14=%#x pending=%d" % (a, b, c, d, e)
+     if ev == 32:
+         return "replay state=%#x res=%x paths=%d ctl.e14=%#x" % (a, b, c, d)
++    if ev == 33:
++        return "described native mode %#x (donor res %x, call %d)" % (a, b, c)
+     if ev == 4:
+         return "ddi=%d res=%x mode=%d conn=%d %s" % (a, b, c, d, link(e))
+     if ev == 11:

@@ -1,0 +1,24 @@
+From a47af29ee112a9c519b36c596b68d4b3b613239e Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 17:53:38 +0530
+Subject: [PATCH 45/47] Include GT frequency and RC6 control in the GPU
+ recovery register copies
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 8262bb7..44fd799 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -11126,6 +11126,8 @@ static bool gpuResetRestoreOn,gpuResetRCSValid;
+ // Before/after copies of the donor hang report's register set, for diffing a
+ // recovered engine against its pre-reset state (both taken with forcewake).
+ static const uint32_t gpuResetDumpRegs[] {
++ // GT frequency (RPS) and RC6 control, PM interrupt enable/mask.
++ 0xA008,0xA00C,0xA010,0xA01C,0xA024,0xA02C,0xA030,0xA068,0xA06C,0xA070,0xA090,0xA094,0xA168,0x19003C,0x190040,
+  0x2028,0x2030,0x2034,0x2038,0x203C,0x2050,0x2054,0x2068,0x206C,0x2070,0x2074,0x2078,
+  0x207C,0x2084,0x208C,0x2090,0x2094,0x2098,0x209C,0x20B0,0x20B4,0x20B8,0x20C0,0x20C4,
+  0x20D0,0x20E0,0x20E4,0x2110,0x2134,0x2140,0x2148,0x2168,0x2178,0x217C,0x2180,0x2190,

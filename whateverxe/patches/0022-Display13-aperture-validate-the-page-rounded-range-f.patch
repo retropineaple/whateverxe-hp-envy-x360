@@ -1,0 +1,24 @@
+From 0cb59c36bfaf7d2b14285227db3e9647b7c18c1d Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 15:44:23 +0530
+Subject: [PATCH 22/47] Display13 aperture: validate the page-rounded range for
+ unaligned native sizes (2880x1800x4)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 410c689..718f7c0 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -9039,7 +9039,7 @@ IOMemoryDescriptor *XE::wrapAlderLakeNAperture(IOService *fb,int apertureIndex)
+ 			backing=adlnInspectSysMem(static_cast<IOService *>(c.controller),fb,slot,layout).status==Display13FBSysMem::Status::Complete;
+ 		}
+ 		if(!parent || !backing ||
+-			!Display13FBMemory::apertureRange(c.pipe[pipe].memory.pool,base,bytes,parent->getLength()))parent=nullptr;
++			!Display13FBMemory::apertureRange(c.pipe[pipe].memory.pool,base,(bytes+4095)&~4095U,parent->getLength()))parent=nullptr;
+ 		if(parent)parent->retain();else {
+ 			uint64_t record[] {1,f[0x1E0],Display13FBMemory::field<uint8_t>(fb,0x4288),Display13FBMemory::field<uint32_t>(c.controller,0xDF0),base,bytes,
+ 				backing,c.pipe[pipe].memory.pool.state,c.pipe[pipe].memory.pool.pages};

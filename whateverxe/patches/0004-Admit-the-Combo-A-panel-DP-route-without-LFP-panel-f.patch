@@ -1,0 +1,120 @@
+From f907db0739c017c7ff09dcfc637d7821842a0652 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 10:04:01 +0530
+Subject: [PATCH 04/47] Admit the Combo A panel DP route without LFP panel
+ facts
+
+The HP Envy x360 13-bf VBT selects its panel by PnP ID (panel_type 0xFF),
+so no panel timing facts are parsed. The DP route never programs PPS;
+require only the internal DP child on Combo A with AUX A. Add the real
+VBT as a parser fixture.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_display13_firmware.hpp    |   4 +++-
+ tests/adlp_panel_dp.cpp                   |  20 +++++++++++++++++++-
+ tests/fixtures/hp-envy-x360-13-bf-vbt.bin | Bin 0 -> 8704 bytes
+ 3 files changed, 22 insertions(+), 2 deletions(-)
+ create mode 100644 tests/fixtures/hp-envy-x360-13-bf-vbt.bin
+
+diff --git a/WhateverXe/kern_display13_firmware.hpp b/WhateverXe/kern_display13_firmware.hpp
+index e0e2738..b5c8beb 100644
+--- a/WhateverXe/kern_display13_firmware.hpp
++++ b/WhateverXe/kern_display13_firmware.hpp
+@@ -38,9 +38,11 @@ namespace XELP { namespace VBT {
+     // Experimental: an internal DP panel the VBT places on Combo A with AUX A.
+     // Linux treats this as eDP; the caller drives it as a fixed Combo DP sink
+     // and must separately prove the firmware-lit route before admission.
++    // Panel timing facts are not required: the DP route never programs PPS, and
++    // firmware may select the panel by PnP ID (LFP options panel_type 0xFF).
+     inline uint32_t display13PanelDP(const Ports &ports) {
+         const auto &p=ports.port[0];
+-        if(!ports.valid() || !ports.panel.valid || ports.panel.ddi!=0 || !(ports.present&1) ||
++        if(!ports.valid() || (ports.panel.valid && ports.panel.ddi!=0) || !(ports.present&1) ||
+            !p.internal() || !p.dp() || (p.type&(0x400|0x20|1)) || p.aux!=0x40)return 0;
+         for(unsigned other=1;other<PortCount;++other)if((ports.present&(1U<<other)) &&
+             ports.port[other].dp() && ports.port[other].aux==0x40)return 0;
+diff --git a/tests/adlp_panel_dp.cpp b/tests/adlp_panel_dp.cpp
+index 4797dc5..311b7db 100644
+--- a/tests/adlp_panel_dp.cpp
++++ b/tests/adlp_panel_dp.cpp
+@@ -2,6 +2,7 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <vector>
++#include <string>
+ #include "kern_vbt.hpp"
+ #include "kern_display13_firmware.hpp"
+ #include "kern_display13_fb_topology.hpp"
+@@ -46,8 +47,10 @@ int main() {
+     assert(!twoPanels.panel.valid);
+     // The Combo A DP route is not offered for a non-A panel, a shared AUX A,
+     // an HDMI A record or a VBT without panel blocks.
++    // Panel blocks are optional (PnP-selected panel type 0xFF): the route only
++    // needs the internal DP child on Combo A.
+     auto noPanel=table(envy,false);auto q=parse(noPanel.data(),noPanel.size(),Family::AlderLakeP,true);
+-    assert(q.valid() && !q.panel.valid && !display13PanelDP(q));
++    assert(q.valid() && !q.panel.valid && display13PanelDP(q)==1);
+     auto shared=tolerant;shared.present|=1U<<3;shared.port[3]={0x68c6,9,0,0x40,0xc0,0};
+     assert(!display13PanelDP(shared));
+     auto hdmiA=tolerant;hdmiA.port[0].type=0x60d2;assert(!display13PanelDP(hdmiA));
+@@ -78,5 +81,20 @@ int main() {
+     uint32_t excluded[2];memcpy(excluded,out.data()+0x20+24+16,8);assert(excluded[0]==1 && excluded[1]==0);
+     // Hotplug keeps Combo A and masks Combo B/C plus every TC source.
+     assert(Display13FBTopology::excludedHotplug(out.data(),Display13FBTopology::Bytes,w)==(0x3F000000U|(6U<<16)));
++    // The real HP Envy x360 13-bf0059tu VBT (BDB 247, panel_type 0xFF).
++    std::string fixture=__FILE__;fixture=fixture.substr(0,fixture.rfind('/')+1)+"fixtures/hp-envy-x360-13-bf-vbt.bin";
++    if(FILE *f=fopen(fixture.c_str(),"rb")) {
++        std::vector<uint8_t> raw(65536);raw.resize(fread(raw.data(),1,raw.size(),f));fclose(f);
++        auto real=parse(raw.data(),raw.size(),Family::AlderLakeP,true);
++        assert(real.valid() && real.version==247 && real.duplicates==1 && !real.panel.valid);
++        assert(real.present==(3U|(0xFU<<3)) && real.port[0].type==0x1806 && real.port[0].aux==0x40);
++        assert(real.port[1].type==0x1806); // eDP-B placeholder wins over the later HDMI-B child
++        assert(display13PanelDP(real)==1);
++        auto fixed=display13Fixed(real,Display13OutputWiring::Physical);
++        assert(fixed.valid && !fixed.hdmi && !fixed.dp); // TC children are Type-C capable, not fixed
++        fixed.dp|=display13PanelDP(real);
++        assert(Display13FBTopology::supportedWiring(fixed,true,1) && fixed.selected()==1);
++        assert(parse(raw.data(),raw.size(),Family::AlderLakeP).status==Status::Conflict);
++    } else assert(!"missing VBT fixture");
+     puts("adlp_panel_dp ok");
+ }
+diff --git a/tests/fixtures/hp-envy-x360-13-bf-vbt.bin b/tests/fixtures/hp-envy-x360-13-bf-vbt.bin
+new file mode 100644
+index 0000000000000000000000000000000000000000..202ce7dc284d08cb05caf85d35e8fe49c1cb89c0
+GIT binary patch
+literal 8704
+zcmeHMUrbw782|2Vd)r}=yFs=NH$1R~0S>s74H;>&+ZJ%$3Y0%XmMo#Lc8-h<#+X54
+zLXA9NjLA(*3|nGsOpMACKKs&_DTyXFdoY^#K;p}?=-U!shV^&Oy->=AtNWv4>38#;
+zdwRa#`Of!!=iKwJ2L}TK%pY#==nMN#b<{@~C`KBsRw_vEr$DHuf4JR0;2#czdxEFf
+zpR}8PsQl{=QB0Edx|=kuDRg-{K3>yT%ep2;$HwE0?eVJ@rza*^Bp71;bLZmY@u`vN
+zc#QQAzUF6KUvW|3+SquEbzi$Q8lP%oP@)0NnvOIyA7RY<YNOWN=+&BzLekdM(suM%
+zaZ!6mu%{~$3i}5_J>9IQkF|&T{r&wNU4if!7U}Cb5ekF`I@*hia$E>bOujWW_Qr*2
+zRuimcUbIs$^a_(%aAIn*f%(VBSs%w-Wqt9h@u@fCv4-Lzt|&z=yF?@@RFWcORs*Dx
+z3k^Js?ZD_@23El`81+RWe;~<_A99i6;YDkN_H4+fP?4>bA(z+$bDFXg^lpUN=~k3f
+zmF=(O?U@bX1(?J{%c9h-)3+Bm?3e{BUTZXJ!MF)zXBO<V1uH=r%2PC%15+*76$`eL
+z$RS{f9GGmuKD1z^M2dhJIWS=+Z2QWB0m5l>qau*1N;fydXrne!HIL-p+W=Vsl1So2
+zv{TaWtNNX7`M$E(9Yr((z6ibso&~=T{s{aD_zUpY;BUY;!9Rk30sjX61H2=KE|<mV
+zcv|TqsOWoI|0*(>H7~Yn&Rt3;F&b?y-`qao%W0y_r)7(zm_LbpYc4+E{Y=PSI&4cj
+zd6&4H^QC8ZrJZTK=Sz86+Id%c7IF^=-4;dJakK@XP+W+>V@05*iZZt592I<8<CHC|
+z8+7nlA+hsCv81`C-1wG;WVd+Vl~lYPC5I@J`DsVOU@QAoSG3BkUC}a&nV;v~`DsX&
+zFlrjw$7&K~mWJ?q=ly0jKMk?Hr2DB_^USxH)jTb;HnIG}2Kd3f@L?(5+6%3Y7J5n3
+zwMnd|oZtly0LVS#D9=m74C^gdb#;RV$>8gEz8b!4oLT8DuhxeavNlKtU)ss7D@%FU
+zaN@YGjV^h0J(bm<kl5n5(Vuzr=K0FO#a^n=It{BYcq9$JKO>luPaNK9Fp|;o3SDDX
+zUm%ipV~6k};mpU28ebwgxpV*;>Ub@)FATBdx|5E%JiNG3n@so4RcVpyd)77B=mnlf
+zB=gar)#=O8xtQkZ6=OiyV8dYI8Xj>>A`Ujf29axUuspoDQ%=bU+oQR)Ag^WGVBmX%
+zhJ>?Kj0Zl*w;t7UTf%dtwO${p&-R6lu>0gTV8i_I@1j<xXo5<ks*24hC*g(4bMA0w
+zWH>T%IX>P!aw+~C{NPSKZOUX`X_Azaw{6PMqLnTa&p**Lvx#I`-UVJKKKXOzo7YES
+zJ|{g6yEYNj{UaUjrr$e(2w~%Wnj#dV!_voe+eWK!^d26#A!zp|;^pGF$WM$Ls6mrx
+zex0^Q)-<1Y7pMRH-7KbXv+*M>n05@z0%Afm%huCO=D3JDpL)5KY3qp1C(@GHmyegB
+z6M1KDMLr+7ykpg!EfO6VyX?g=ak$1uUckj+67NFG+1M4L{p3g3UCDgrOaFZ?+cUX2
+zMNsQ4a|e(s+vdNH^%W^%Z?(<+D41V}Kp_H!2oxevh(I9%g$NWP@IOYN?K62F-Cl(S
+zc3tw&JZ_<@aoNRh9f%U(N0qI7j=O2cf~3(TbZfY&##t7W0(04ngGnl6<#shkX8g)!
+zE7A}xKvtb2OV7xpE1IlB%aYxjBfHln(V$~d>Ldd`R6u6lC??R}&uNJaB}p1F=&V@x
+zF9n%#My7<*lr7m0;9pH~11jvaCnZWc(o%%3)10jeI?XdSug87Rm1Xi!FJv*4nC)@d
+zRx#tUgT*{9NgU~6jcpHVW#dxT&Ta9)_j+oz*XP)I<6YdXxbSB=9#TqS3-o|e;IpGd
+W3E99^W0Y2;{qVuOhk0IPaPe=Urgbg=
+
+literal 0
+HcmV?d00001
+

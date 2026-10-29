@@ -1,0 +1,78 @@
+From 5c6ba6c25bd8189a10836f95a53ada7ce2544ebd Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 17:17:06 +0530
+Subject: [PATCH 42/47] Allow running compute on the render engine
+ (-wex-no-multicontext)
+
+Opt-in: clear EnableMultiContext in the donor's Development settings before
+accelerator start, so populateAccelConfig leaves the second (multi-context
+compute) command streamer disabled and compute work uses the render engine.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                               |  1 +
+ README_ja.md                            |  1 +
+ WhateverXe/kern_xe.cpp                  | 13 +++++++++++++
+ tests/fixtures/boot_argument_names.json |  1 +
+ 4 files changed, 16 insertions(+)
+
+diff --git a/README.md b/README.md
+index 1d350a8..669a381 100644
+--- a/README.md
++++ b/README.md
+@@ -198,6 +198,7 @@ otherwise unsupported display backend.
+ Temporary development diagnostic: `-wex-adlp-readout` captures ADL-P boot resources while keeping GPU driver admission disabled. It is not required for supported hardware. It also records the firmware-programmed eDP path (transcoder, PPS, backlight, PSR, PLL and Combo PHY A registers), the VBT, and sink DPCD read over an idle AUX A; add `-wex-adlp-readout-noaux` to skip the DPCD reads.
+ Temporary development diagnostic: `-wex-reset-trace` records each GPU hang recovery step (channel restart, engine reset, scheduler reset and resume, command-streamer reset) with the render engine's reset and ring registers in the `WEXGPUResetTrace` registry property. It does not change recovery.
+ Experimental: `-wex-reset-restore` saves the render engine's mode, status-page and chicken registers just before a render-domain GPU hang reset and writes them back after the reset, before work is replayed, on GPUs where the reset clears them. It also enables the reset trace.
++Experimental: `-wex-no-multicontext` disables the donor's second (multi-context compute) command streamer, so compute work runs on the render engine.
+ `-wex-adlp-load-only` blocks both native framebuffer and accelerator probes/starts on a selected ADL-P/RPL-P device, for load-only diagnostics without GPU initialization.
+ `-wex-display13-offline` keeps native display controller initialization enabled on Alder Lake-N / Twin Lake and Alder Lake-H/P/U / Raptor Lake-H/P/U but reports selected outputs as disconnected, isolating HPD/EDID and mode programming for framebuffer diagnostics. It does not establish display operation.
+ 
+diff --git a/README_ja.md b/README_ja.md
+index 28c10db..cc9d188 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -145,6 +145,7 @@ Alder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/UではGPU資源
+ 開発時の一時診断用に `-wex-adlp-readout` を指定すると、GPUドライバの受付を閉じたままADL-Pの起動資源を採取します。対応済みハードウェアでは不要です。ファームウェアが設定したeDP経路（トランスコーダ、PPS、バックライト、PSR、PLL、Combo PHY Aのレジスタ）とVBT、およびアイドル状態のAUX A経由で読み出したシンクのDPCDも記録します。DPCDの読み出しを省くには `-wex-adlp-readout-noaux` を追加します。
+ 開発時の一時診断用に `-wex-reset-trace` を指定すると、GPUハングからの回復処理の各段階（チャネル再起動、エンジンリセット、スケジューラのリセットと再開、コマンドストリーマのリセット）を、レンダーエンジンのリセット関連およびリングのレジスタとともに `WEXGPUResetTrace` レジストリプロパティへ記録します。回復処理の動作は変更しません。
+ 実験的機能: `-wex-reset-restore` を指定すると、レンダードメインのGPUハングリセットの直前にレンダーエンジンのモード、ステータスページ、チキンの各レジスタを保存し、リセット後かつ処理の再投入前に書き戻します。リセットでこれらが消去されるGPU向けです。リセットのトレースも有効になります。
++実験的機能: `-wex-no-multicontext` を指定すると、ドナーの2番目の（マルチコンテキスト・コンピュート）コマンドストリーマを無効にし、コンピュート処理をレンダーエンジンで実行します。
+ `-wex-adlp-load-only` は選択済みADL-P/RPL-Pで、FramebufferとAccelerator両方のnative probe/startを止め、GPUを初期化せずにロード段階を診断します。
+ `-wex-display13-offline` はAlder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/Uのnative display controller初期化を有効に保ち、選択した出力を未接続として扱います。FB診断でHPD/EDIDとmode設定を切り離すための設定で、表示成立を意味しません。
+ 
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 6c5d475..2e113c7 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -14065,6 +14065,19 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
+ 		if (renderer->unsigned32BitValue() == 0x1080040)
+ 			that->setProperty("IOVARendererID", 0x1080080, 32);
+ 	}
++	// -wex-no-multicontext: the donor personality enables its second
++	// (multi-context compute) command streamer. Run compute on the render
++	// engine instead; populateAccelConfig reads this before engine setup.
++	if (checkKernelArgument("-wex-no-multicontext")) {
++		auto dev=OSDynamicCast(OSDictionary,that->getProperty("Development"));
++		auto copy=dev ? OSDictionary::withDictionary(dev) : nullptr;
++		auto zero=OSNumber::withNumber(0ULL,32);
++		const bool set=copy && zero && copy->setObject("EnableMultiContext",zero);
++		if (set) that->setProperty("Development",copy);
++		IORegistryEntry::getRegistryRoot()->setProperty("WEXMultiContextDisabled",set);
++		if (zero) zero->release();
++		if (copy) copy->release();
++	}
+ 
+ 	// Big Sur's HEVC decoder requires this registry admission key in addition
+ 	// to the per-profile capability dictionary. The TGL personality has the
+diff --git a/tests/fixtures/boot_argument_names.json b/tests/fixtures/boot_argument_names.json
+index fe23f79..56d700f 100644
+--- a/tests/fixtures/boot_argument_names.json
++++ b/tests/fixtures/boot_argument_names.json
+@@ -139,6 +139,7 @@
+   "-wex-adlp-readout": [],
+   "-wex-adlp-readout-noaux": [],
+   "-wex-adlp-edp": [],
++  "-wex-no-multicontext": [],
+   "-wex-noppguard": [],
+   "-wex-reset-restore": [],
+   "-wex-reset-trace": [],

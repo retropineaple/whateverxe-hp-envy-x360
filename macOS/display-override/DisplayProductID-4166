@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>DisplayProductID</key>
+	<integer>16742</integer>
+	<key>DisplayProductName</key>
+	<string>Built-in OLED (HP Envy x360 13)</string>
+	<key>DisplayVendorID</key>
+	<integer>19587</integer>
+	<key>scale-resolutions</key>
+	<array>
+		<data>
+		AAAMAAAAB4AAAAABAAAAAA==
+		</data>
+		<data>
+		AAAMgAAAB9AAAAABAAAAAA==
+		</data>
+		<data>
+		AAANIAAACDQAAAABAAAAAA==
+		</data>
+		<data>
+		AAAKAAAABkAAAAABAAAAAA==
+		</data>
+		<data>
+		AAAJAAAABaAAAAABAAAAAA==
+		</data>
+		<data>
+		AAAIAAAABQAAAAABAAAAAA==
+		</data>
+	</array>
+	<key>target-default-ppmm</key>
+	<real>10.0699301</real>
+</dict>
+</plist>

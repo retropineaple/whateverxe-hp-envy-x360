@@ -1,0 +1,119 @@
+From 598474aa238d55d4e485dbf4a65084187f8ff220 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 18:03:09 +0530
+Subject: [PATCH 46/47] Complete stamps lost in a GPU hang reset
+ (-wex-reset-restore)
+
+Stamps whose work the reset dropped never return, so IOAccel's progress
+check signals a restart for them every few seconds and skips it for lack
+of a channel, stalling the GPU work loop each time. Two seconds after a
+recovery, complete stamp slots still behind their last issued value that
+have not moved since the recovery.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md              |  2 +-
+ README_ja.md           |  2 +-
+ WhateverXe/kern_xe.cpp | 36 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/README.md b/README.md
+index 18ec427..dae0140 100644
+--- a/README.md
++++ b/README.md
+@@ -197,7 +197,7 @@ otherwise unsupported display backend.
+ 
+ Temporary development diagnostic: `-wex-adlp-readout` captures ADL-P boot resources while keeping GPU driver admission disabled. It is not required for supported hardware. It also records the firmware-programmed eDP path (transcoder, PPS, backlight, PSR, PLL and Combo PHY A registers), the VBT, and sink DPCD read over an idle AUX A; add `-wex-adlp-readout-noaux` to skip the DPCD reads.
+ Temporary development diagnostic: `-wex-reset-trace` records each GPU hang recovery step (channel restart, engine reset, scheduler reset and resume, command-streamer reset) with the render engine's reset and ring registers in the `WEXGPUResetTrace` registry property. It does not change recovery.
+-Experimental: `-wex-reset-restore` saves the render engine's mode, status-page, chicken and user-mode whitelist registers just before a render-domain GPU hang reset and writes them back after the reset, before work is replayed, on GPUs where the reset clears them. It also enables the reset trace.
++Experimental: `-wex-reset-restore` saves the render engine's mode, status-page, chicken and user-mode whitelist registers just before a render-domain GPU hang reset and writes them back after the reset, before work is replayed, on GPUs where the reset clears them, and two seconds later completes stamps whose work the reset lost. It also enables the reset trace.
+ Experimental: `-wex-no-multicontext` disables the donor's second (multi-context compute) command streamer, so compute work runs on the render engine.
+ `-wex-adlp-load-only` blocks both native framebuffer and accelerator probes/starts on a selected ADL-P/RPL-P device, for load-only diagnostics without GPU initialization.
+ `-wex-display13-offline` keeps native display controller initialization enabled on Alder Lake-N / Twin Lake and Alder Lake-H/P/U / Raptor Lake-H/P/U but reports selected outputs as disconnected, isolating HPD/EDID and mode programming for framebuffer diagnostics. It does not establish display operation.
+diff --git a/README_ja.md b/README_ja.md
+index 2e9ada1..2d4c2fa 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -144,7 +144,7 @@ Alder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/UではGPU資源
+ 
+ 開発時の一時診断用に `-wex-adlp-readout` を指定すると、GPUドライバの受付を閉じたままADL-Pの起動資源を採取します。対応済みハードウェアでは不要です。ファームウェアが設定したeDP経路（トランスコーダ、PPS、バックライト、PSR、PLL、Combo PHY Aのレジスタ）とVBT、およびアイドル状態のAUX A経由で読み出したシンクのDPCDも記録します。DPCDの読み出しを省くには `-wex-adlp-readout-noaux` を追加します。
+ 開発時の一時診断用に `-wex-reset-trace` を指定すると、GPUハングからの回復処理の各段階（チャネル再起動、エンジンリセット、スケジューラのリセットと再開、コマンドストリーマのリセット）を、レンダーエンジンのリセット関連およびリングのレジスタとともに `WEXGPUResetTrace` レジストリプロパティへ記録します。回復処理の動作は変更しません。
+-実験的機能: `-wex-reset-restore` を指定すると、レンダードメインのGPUハングリセットの直前にレンダーエンジンのモード、ステータスページ、チキン、ユーザーモード許可リストの各レジスタを保存し、リセット後かつ処理の再投入前に書き戻します。リセットでこれらが消去されるGPU向けです。リセットのトレースも有効になります。
++実験的機能: `-wex-reset-restore` を指定すると、レンダードメインのGPUハングリセットの直前にレンダーエンジンのモード、ステータスページ、チキン、ユーザーモード許可リストの各レジスタを保存し、リセット後かつ処理の再投入前に書き戻します。リセットでこれらが消去されるGPU向けです。2秒後には、リセットで処理が失われたスタンプを完了扱いにします。リセットのトレースも有効になります。
+ 実験的機能: `-wex-no-multicontext` を指定すると、ドナーの2番目の（マルチコンテキスト・コンピュート）コマンドストリーマを無効にし、コンピュート処理をレンダーエンジンで実行します。
+ `-wex-adlp-load-only` は選択済みADL-P/RPL-Pで、FramebufferとAccelerator両方のnative probe/startを止め、GPUを初期化せずにロード段階を診断します。
+ `-wex-display13-offline` はAlder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/Uのnative display controller初期化を有効に保ち、選択した出力を未接続として扱います。FB診断でHPD/EDIDとmode設定を切り離すための設定で、表示成立を意味しません。
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 44fd799..7640f82 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -1,5 +1,6 @@
+ #include "kern_display13_color.hpp"
+ #include <mach/clock.h>
++#include <kern/thread_call.h>
+ //
+ //  kern_xe.cpp
+ //  WhateverGreen
+@@ -11123,6 +11124,37 @@ static const GPUResetRCSRegister gpuResetRCSRegisters[] {{0x229C,true},{0x2080,f
+  {0x2054,false},{0x20B4,false},{0x24D0,false},{0x24D4,false},{0x24D8,false},{0x24DC,false},{0x24E0,false},
+  {0x24E4,false},{0x24E8,false},{0x24EC,false},{0x24F0,false},{0x24F4,false},{0x24F8,false},{0x24FC,false}};
+ static bool gpuResetRestoreOn,gpuResetRCSValid;
++// Stamps whose work was lost in the reset never return, and IOAccel's
++// progress check then signals a restart for them every few seconds with no
++// channel to restart (the GPU work loop stalls each time). Two seconds after a
++// recovery, complete any stamp slot that is still behind its last issued value
++// and has not moved since: {returned +0, issued +8} in 64-byte slots at the
++// ring's +0x30, 64 slots. This fails the lost work instead of waiting forever.
++static uint8_t *volatile gpuResetStampBase;
++static uint32_t gpuResetStampSeen[64];
++static thread_call_t gpuResetStampCall;
++static volatile uint32_t gpuResetStampForced;
++static void gpuResetTrace(uint32_t event,const void *object,uint64_t arg,uint64_t result);
++static void gpuResetStampSweep(thread_call_param_t,thread_call_param_t) {
++ auto base=__atomic_load_n(&gpuResetStampBase,__ATOMIC_ACQUIRE);
++ if(!base)return;
++ uint64_t mask=0;uint32_t forced=0;
++ for(unsigned i=0;i<arrsize(gpuResetStampSeen);++i) {
++  auto slot=reinterpret_cast<volatile uint32_t *>(base+i*64);
++  const uint32_t done=slot[0],issued=slot[2];
++  if(int32_t(issued-done)>0 && done==gpuResetStampSeen[i]) {slot[0]=issued;mask|=1ULL<<i;++forced;}
++ }
++ __atomic_fetch_add(&gpuResetStampForced,forced,__ATOMIC_RELAXED);
++ gpuResetTrace(14,base,mask,forced);
++}
++static void gpuResetStampArm() {
++ auto base=__atomic_load_n(&gpuResetStampBase,__ATOMIC_ACQUIRE);
++ if(!base || !gpuResetStampCall)return;
++ for(unsigned i=0;i<arrsize(gpuResetStampSeen);++i)
++  gpuResetStampSeen[i]=*reinterpret_cast<volatile uint32_t *>(base+i*64);
++ uint64_t deadline;clock_interval_to_deadline(2,kSecondScale,&deadline);
++ thread_call_enter_delayed(gpuResetStampCall,deadline);
++}
+ // Before/after copies of the donor hang report's register set, for diffing a
+ // recovered engine against its pre-reset state (both taken with forcewake).
+ static const uint32_t gpuResetDumpRegs[] {
+@@ -11170,6 +11202,7 @@ static void gpuResetDumpAfter(void *channel) {
+  auto mmio=accel?*reinterpret_cast<uint8_t **>(accel+0x1240):nullptr;
+  if(!mmio)return;
+  gpuResetForceWake(accel,true,7);gpuResetDumpTake(mmio,1);gpuResetForceWake(accel,false,7);
++ gpuResetStampArm();
+ }
+ static uint32_t gpuResetSaveRCS(uint8_t *accel) {
+  auto mmio=*reinterpret_cast<uint8_t **>(accel+0x1240);
+@@ -11226,6 +11259,8 @@ static uint64_t gpuResetEngine(void *ring,void *context) {
+  auto accel=*reinterpret_cast<uint8_t **>(static_cast<uint8_t *>(ring)+0x10);
+  if(accel)__atomic_store_n(&gpuResetMMIO,*reinterpret_cast<uint8_t **>(accel+0x1240),__ATOMIC_RELEASE);
+  const auto engine=*(static_cast<uint8_t *>(ring)+0x40);
++ if(auto stamps=*reinterpret_cast<uint8_t **>(static_cast<uint8_t *>(ring)+0x30))
++  __atomic_store_n(&gpuResetStampBase,stamps,__ATOMIC_RELEASE);
+  auto state=*reinterpret_cast<uint8_t **>(static_cast<uint8_t *>(ring)+0x8B8+engine*8);
+  const uint64_t arg=engine|(uint64_t(state?*reinterpret_cast<uint32_t *>(state+0xA4):UINT32_MAX)<<32);
+  // Event 12: the ring's own reset MMIO base (+0x50) relative to the
+@@ -11286,6 +11321,7 @@ static bool gpuResetTraceInstall(KernelPatcher &patcher,size_t index,mach_vm_add
+    gpuResetForceWake=reinterpret_cast<void (*)(void *,bool,unsigned)>(at);
+  }
+  const bool restore=ready && gpuResetForceWake;
++ if(restore && !gpuResetStampCall)gpuResetStampCall=thread_call_allocate(gpuResetStampSweep,nullptr);
+  __atomic_store_n(&gpuResetRestoreOn,restore,__ATOMIC_RELEASE);
+  auto root=IORegistryEntry::getRegistryRoot();
+  root->setProperty("WEXGPUResetTraceReady",ready);

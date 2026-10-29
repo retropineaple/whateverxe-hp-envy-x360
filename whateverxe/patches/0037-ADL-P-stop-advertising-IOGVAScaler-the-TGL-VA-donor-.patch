@@ -1,0 +1,47 @@
+From 0c6c6c0b7039f54e8eb58880264e69f9938799f1 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 06:49:27 +0530
+Subject: [PATCH 37/47] ADL-P: stop advertising IOGVAScaler; the TGL VA donor
+ has no VEBOX render component here
+
+AppleGVA pixel transfers fault in VPHAL renderer init (pRender[VEBOX] null)
+and the VPP path can hang RCS/BCS. -wex-adlp-gvascaler keeps the scaler.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp                  | 9 +++++++++
+ tests/fixtures/boot_argument_names.json | 1 +
+ 2 files changed, 10 insertions(+)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 3dd0b2c..0a53c26 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -13868,6 +13868,15 @@ bool XE::wrapTGLAcceleratorStart(IOService *that, IOService *provider) {
+ 	    OSDynamicCast(OSDictionary, that->getProperty("IOGVAHEVCDecodeCapabilities")))
+ 		that->setProperty("IOGVAHEVCDecode", "2");
+ 
++	// ADL-P: the TGL VA donor never creates its VPHAL VEBOX render component
++	// here (pRender[VEBOX] stays null), so every AppleGVA pixel transfer
++	// faults in the renderer init and its VPP work can hang RCS/BCS. Do not
++	// advertise the hardware scaler; VideoToolbox then converts frames itself
++	// while hardware decode stays enabled.
++	if (callbackXE->xeProfile.mobileDisplay13() && !checkKernelArgument("-wex-adlp-gvascaler") &&
++	    that->getProperty("IOGVAScaler"))
++		that->removeProperty("IOGVAScaler");
++
+ 	if (!tglBlitScratchSize || (*tglBlitScratchSize!=0xD240 && *tglBlitScratchSize!=0xE000)) {
+ 		SYSLOG("igfx", "TGL blit scratch parameter mismatch");
+ 		return false;
+diff --git a/tests/fixtures/boot_argument_names.json b/tests/fixtures/boot_argument_names.json
+index 4c58344..7878ced 100644
+--- a/tests/fixtures/boot_argument_names.json
++++ b/tests/fixtures/boot_argument_names.json
+@@ -139,6 +139,7 @@
+   "-wex-adlp-readout": [],
+   "-wex-adlp-readout-noaux": [],
+   "-wex-adlp-edp": [],
++  "-wex-adlp-gvascaler": [],
+   "-wex-adlp-load-only": [],
+   "-wex-display13-offline": []
+ }

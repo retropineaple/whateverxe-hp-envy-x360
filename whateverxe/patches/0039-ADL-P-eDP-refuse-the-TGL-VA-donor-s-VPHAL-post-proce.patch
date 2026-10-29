@@ -1,0 +1,87 @@
+From a5f4265d3a7b6ce7c708b74175299c9903e291a4 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 07:40:38 +0530
+Subject: [PATCH 39/47] ADL-P eDP: refuse the TGL VA donor's VPHAL
+ post-processing context (Lilu user patch)
+
+The donor's Gen12 renderer has no VEBOX render component, so every
+GVAVPHALPPCreateContext user crashes or hangs the GPU. Take the context's
+existing unsupported-resolution exit; AppleGVA then fails data-path creation
+and VideoToolbox converts frames itself. Verified in-process: BGRA->420v gives
+correct BT.709 values. -wex-noppguard disables the patch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp                  | 21 +++++++++++++++++++++
+ tests/boot_arguments.py                 |  6 +++++-
+ tests/fixtures/boot_argument_names.json |  1 +
+ 3 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 3dd0b2c..fde017e 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -3785,6 +3785,25 @@ extern "C" __attribute__((naked, used)) void tglGuCDMAWriteBridge() {
+ 		"jmpq *_tglGuCDMAWriteResume(%rip)\n");
+ }
+ 
++// The TGL VA donor's Gen12 VPHAL renderer never allocates its VEBOX render
++// component, yet single-stream pixel processing runs only through it: every
++// GVAVPHALPPCreateContext user (AppleGVA pixel transfer, decoder output
++// conversion) faults in VphalRenderer init or render, and its VPP work can
++// hang RCS/BCS. Take the context's existing "unsupported resolution" exit so
++// AppleGVA refuses at data-path creation and VideoToolbox converts frames
++// itself; hardware decode is unaffected. Lilu patches pages in memory only.
++static const uint8_t vaPPGuardFind[] {0x41,0x8b,0x4e,0x24,0x39,0xc2,0x0f,0x87,0x60,0x06,0x00,0x00,0x39,0xc1,0x0f,0x87,0x58,0x06,0x00,0x00};
++static const uint8_t vaPPGuardRepl[] {0x41,0x8b,0x4e,0x24,0xe9,0x63,0x06,0x00,0x00,0x0f,0x1f,0x00,0x39,0xc1,0x0f,0x87,0x58,0x06,0x00,0x00};
++static UserPatcher::BinaryModPatch vaPPGuardPatch[] {
++    {CPU_TYPE_X86_64,0,vaPPGuardFind,vaPPGuardRepl,sizeof(vaPPGuardFind),0,1,UserPatcher::FileSegment::SegmentTextText,1}
++};
++static UserPatcher::BinaryModInfo vaPPGuardMod[] {
++    {"/Library/GPUBundles/AppleIntelTGLGraphicsVADriver.bundle/Contents/MacOS/AppleIntelTGLGraphicsVADriver",vaPPGuardPatch,arrsize(vaPPGuardPatch)}
++};
++static UserPatcher::ProcInfo vaPPGuardProc[] {
++    {"VTDecoderXPCService",static_cast<uint32_t>(sizeof("VTDecoderXPCService")-1),1,UserPatcher::ProcInfo::MatchSuffix}
++};
++
+ void XE::init() {
+     callbackXE = this;
+     // Register notifications before Lilu closes registration. Actual family
+@@ -3792,6 +3811,8 @@ void XE::init() {
+     lilu.onKextLoadForce(&kextAppleIntelTGLCompat);
+     lilu.onKextLoadForce(&kextIntelTGL);
+     lilu.onKextLoadForce(&kextIntelTGLFb);
++    if (checkKernelArgument("-wex-adlp-edp") && !checkKernelArgument("-wex-noppguard"))
++        lilu.onProcLoadForce(vaPPGuardProc,arrsize(vaPPGuardProc),nullptr,nullptr,vaPPGuardMod,arrsize(vaPPGuardMod));
+ }
+ 
+ void XE::selectProfile(const XELP::Profile &profile) {
+diff --git a/tests/boot_arguments.py b/tests/boot_arguments.py
+index b5fe488..150de24 100644
+--- a/tests/boot_arguments.py
++++ b/tests/boot_arguments.py
+@@ -61,7 +61,11 @@ bool checkKernelArgument(const char *name) { return args.count(name); }
+ #define IOLog(...) ((void)0)
+ static bool display13Offline;
+ static int kextIntelTGLFb, kextAppleIntelTGLCompat, kextIntelTGL;
+-static struct { void onKextLoadForce(int *) {} } lilu;
++static struct { void onKextLoadForce(int *) {} template<class... A> void onProcLoadForce(A...) {} } lilu;
++static int vaPPGuardProc[1],vaPPGuardMod[1];
++#ifndef arrsize
++#define arrsize(a) (sizeof(a)/sizeof((a)[0]))
++#endif
+ struct XE {
+  XELP::Profile xeProfile;
+  bool adlnRequested=false, adlnDetected=false, adlnKernelReady=false, adlnNativeRequested=false, adlsDisplaySelected=false, display12SmallGTDetected=false;
+diff --git a/tests/fixtures/boot_argument_names.json b/tests/fixtures/boot_argument_names.json
+index 4c58344..3f5a0ec 100644
+--- a/tests/fixtures/boot_argument_names.json
++++ b/tests/fixtures/boot_argument_names.json
+@@ -139,6 +139,7 @@
+   "-wex-adlp-readout": [],
+   "-wex-adlp-readout-noaux": [],
+   "-wex-adlp-edp": [],
++  "-wex-noppguard": [],
+   "-wex-adlp-load-only": [],
+   "-wex-display13-offline": []
+ }

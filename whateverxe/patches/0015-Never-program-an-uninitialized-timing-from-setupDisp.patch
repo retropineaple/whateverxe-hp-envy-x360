@@ -1,0 +1,101 @@
+From 880835ed1156a837861a7534e82b7bfd0bddb9c5 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 14:14:10 +0530
+Subject: [PATCH 15/47] Never program an uninitialized timing from
+ setupDisplayTiming
+
+setupDisplayTiming returns without writing its output when the AGDC link
+validation callback fails, and hwSetMode then programmed the caller's
+stack garbage (striped scanout) and SetupTimings panicked dividing by a
+zero total. Zero the output and fall back to the requested timing when
+the donor leaves it empty; trace the request and the outcome.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp      | 26 +++++++++++++++++++++++++-
+ WhateverXe/kern_xe.hpp      |  3 ++-
+ tools/decode_panel_trace.py |  4 +++-
+ 3 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index d523b21..d278983 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -7147,6 +7147,26 @@ uint32_t XE::wrapPanelCurrentMode(IOService *fb,int *mode,int *depth) {
+  if(mode)*mode=chosen;
+  return r;
+ }
++// setupDisplayTiming fills its output only when the AGDC link validation
++// callback succeeds; otherwise it returns with the caller's uninitialized
++// stack timing, which hwSetMode then programs (garbage scanout) until
++// SetupTimings divides by a zero total. Zero the output first and, if the
++// donor left it empty, program the requested timing unchanged.
++void XE::wrapPanelSetupTiming(IOService *fb,const void *timing,void *out) {
++ constexpr size_t Bytes=0xA0; // hwSetMode copies 0xA0 bytes of this record
++ if(out)bzero(out,Bytes);
++ FunctionCast(wrapPanelSetupTiming,callbackXE->orgPanelSetupTiming)(fb,timing,out);
++ if(!timing || !out)return;
++ auto in=static_cast<const uint8_t *>(timing);auto o=static_cast<uint8_t *>(out);
++ const auto field=[](const uint8_t *p,size_t off){uint32_t v;memcpy(&v,p+off,4);return v;};
++ uint64_t clock=0;memcpy(&clock,in+0x28,8);
++ const bool empty=!field(o,0x40) || !field(o,0x50) || !(field(o,0x40)+field(o,0x44)) || !(field(o,0x50)+field(o,0x54));
++ const bool usable=field(in,0x40) && field(in,0x50) && clock;
++ if(empty && usable)memcpy(out,timing,Bytes);
++ display13PanelTrace(27,(uint64_t(field(in,0x40))<<32)|field(in,0x50),clock,
++  (uint64_t(field(o,0x40))<<32)|field(o,0x50),empty|(uint64_t(empty && usable)<<1),
++  fb && fb->getMetaClass()->getClassSize()>=0x4B90 ? uint32_t(Display13FBMemory::field<int32_t>(fb,0x4250)) : UINT32_MAX);
++}
+ bool XE::processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
+  const char *changed="__ZN21AppleIntelFramebuffer17connectionChangedEv";
+  const char *online="__ZN21AppleIntelFramebuffer13getOnlineInfoEP21AppleIntelDisplayPathPhS2_";
+@@ -7164,9 +7184,13 @@ bool XE::processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_
+  const uint8_t currentEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xa8,0,0,0};
+  const auto m=patcher.solveSymbol<mach_vm_address_t>(index,current,address,size);patcher.clearError();
+  if(m!=address+0x32A88 || memcmp(reinterpret_cast<void *>(m),currentEntry,sizeof(currentEntry)))return false;
++ const char *timingSym="__ZN21AppleIntelFramebuffer18setupDisplayTimingEPK29IODetailedTimingInformationV2PS0_";
++ const uint8_t timingEntry[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,0x81,0xec,0xb0,0,0,0};
++ const auto t=patcher.solveSymbol<mach_vm_address_t>(index,timingSym,address,size);patcher.clearError();
++ if(t!=address+0x6814C || memcmp(reinterpret_cast<void *>(t),timingEntry,sizeof(timingEntry)))return false;
+  KernelPatcher::RouteRequest routes[]={{changed,wrapPanelConnectionChanged,orgPanelConnectionChanged},
+   {online,wrapPanelGetOnlineInfo,orgPanelGetOnlineInfo},{probe,wrapPanelConnectionProbe,orgPanelConnectionProbe},
+-  {current,wrapPanelCurrentMode,orgPanelCurrentMode}};
++  {current,wrapPanelCurrentMode,orgPanelCurrentMode},{timingSym,wrapPanelSetupTiming,orgPanelSetupTiming}};
+  const bool ok=patcher.routeMultipleShort(index,routes,arrsize(routes),address,size);patcher.clearError();
+  IORegistryEntry::getRegistryRoot()->setProperty("WEXPanelTraceReady",ok);
+  // IntelFBClientControl::doAttribute forwards AGDC's per-FB online request to
+diff --git a/WhateverXe/kern_xe.hpp b/WhateverXe/kern_xe.hpp
+index 13efba0..fd9696e 100644
+--- a/WhateverXe/kern_xe.hpp
++++ b/WhateverXe/kern_xe.hpp
+@@ -183,7 +183,8 @@ private:
+  bool processDisplay13PanelTrace(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size);
+  mach_vm_address_t orgPanelConnectionChanged {},orgPanelGetOnlineInfo {},orgPanelConnectionProbe {};
+  static uint32_t wrapPanelConnectionProbe(IOService *fb);
+- mach_vm_address_t orgPanelCurrentMode {};
++ mach_vm_address_t orgPanelCurrentMode {},orgPanelSetupTiming {};
++ static void wrapPanelSetupTiming(IOService *fb,const void *timing,void *out);
+  static uint32_t wrapPanelCurrentMode(IOService *fb,int *mode,int *depth);
+  static uint32_t wrapPanelConnectionChanged(IOService *fb);
+  static uint32_t wrapPanelGetOnlineInfo(IOService *fb,void *path,uint8_t *online,uint8_t *info);
+diff --git a/tools/decode_panel_trace.py b/tools/decode_panel_trace.py
+index 26162de..7a9ae37 100644
+--- a/tools/decode_panel_trace.py
++++ b/tools/decode_panel_trace.py
+@@ -4,7 +4,7 @@ import re, struct, sys
+ 
+ NAMES = {1: "attr", 4: "probe", 5: "AUXFAIL", 6: "enablePort", 7: "disablePort", 8: "trainPat",
+          9: "clkOn", 10: "clkOff", 11: "DDC", 20: "connChg>", 21: "connChg<", 22: "online>",
+-         23: "online<", 24: "connProbe", 25: "curMode", 26: "linkBW", 30: "bootAdopt"}
++         23: "online<", 24: "connProbe", 25: "curMode", 26: "linkBW", 27: "setupTim", 30: "bootAdopt"}
+ ALL = (1 << 64) - 1
+ 
+ 
+@@ -36,6 +36,8 @@ def describe(ev, a, b, c, d, e):
+         return "live=%dx%d modes=%d chosen=%x first.pclk=%d first=%dx%d" % (a >> 32, a & 0xffffffff, b, c, d, e >> 32, e & 0xffffffff)
+     if ev == 26:
+         return "dpcd@%x len=%d LINK_BW_SET %#x -> %#x (port rate %d)" % (a, b, c, d, e)
++    if ev == 27:
++        return "req=%dx%d pclk=%d out=%dx%d empty=%d fallback=%d curMode=%x" % (a >> 32, a & 0xffffffff, b, c >> 32, c & 0xffffffff, d & 1, (d >> 1) & 1, e)
+     if ev == 4:
+         return "ddi=%d res=%x mode=%d conn=%d %s" % (a, b, c, d, link(e))
+     if ev == 11:

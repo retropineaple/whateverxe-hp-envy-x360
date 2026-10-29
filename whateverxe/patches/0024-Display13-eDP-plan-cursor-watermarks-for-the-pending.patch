@@ -1,0 +1,27 @@
+From 30cf3e02e768bdde33ac2fa8911d3a4605f621c2 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 18:24:57 +0530
+Subject: [PATCH 24/47] Display13 eDP: plan cursor watermarks for the pending
+ cursor size on HiDPI resize
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_xe.cpp | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 8b327b5..19bca4c 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -9432,7 +9432,10 @@ void XE::adlnWMSetup(OSObject *plane,OSObject *path,bool cursor) {
+ 		inputs[19]=width;inputs[20]=htotal;inputs[21]=rgbSupported;inputs[22]=powered;
+ 		inputs[23]=Display13FBMemory::field<uint32_t>(plane,0x10C);
+ 		if(powered && rangeRaw!=UINT32_MAX && Display13DBUF::valid(range) && rgbSupported && ipc!=UINT32_MAX &&
+-			(!cursor || Display13WM::cursorMatches(cursorMode,width,true)) &&
++			// -wex-adlp-edp: on a cursor resize (HiDPI scaled modes) CUR_CTL still
++			// holds the previous size until native programs it after this plan.
++			(!cursor || Display13WM::cursorMatches(cursorMode,width,true) ||
++			 (callbackXE->display13PanelDP && Display13WM::cursorMatches(0,width,true))) &&
+ 			!(Display13DBUF::slices(range)&~Display13DBUF::allowed(c.dbuf,pipe)) &&
+ 			(cursor || !Display13DBUF::overlap(range,c.dbuf.pipe[pipe].cursor))) {
+ 			// Audited native pixel/scaling calculation is CPU-only. Preserve its

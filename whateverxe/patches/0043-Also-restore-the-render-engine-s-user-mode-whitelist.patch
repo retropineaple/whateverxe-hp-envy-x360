@@ -1,0 +1,61 @@
+From 4c1eb403171c007ed1c4d7fee6d5a647851d6cb3 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Thu, 29 Oct 2026 17:39:19 +0530
+Subject: [PATCH 43/47] Also restore the render engine's user-mode whitelist
+ after a GPU hang reset
+
+The render-domain reset also clears FORCE_TO_NONPRIV0..11, RC_PWRCTX_MAX
+and EMR. Without the whitelist the donor's Metal and VA drivers lose their
+register writes, and the GPU stays slow after recovery. Save and restore
+them with the other render engine registers under -wex-reset-restore.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md              | 2 +-
+ README_ja.md           | 2 +-
+ WhateverXe/kern_xe.cpp | 6 +++++-
+ 3 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/README.md b/README.md
+index 669a381..18ec427 100644
+--- a/README.md
++++ b/README.md
+@@ -197,7 +197,7 @@ otherwise unsupported display backend.
+ 
+ Temporary development diagnostic: `-wex-adlp-readout` captures ADL-P boot resources while keeping GPU driver admission disabled. It is not required for supported hardware. It also records the firmware-programmed eDP path (transcoder, PPS, backlight, PSR, PLL and Combo PHY A registers), the VBT, and sink DPCD read over an idle AUX A; add `-wex-adlp-readout-noaux` to skip the DPCD reads.
+ Temporary development diagnostic: `-wex-reset-trace` records each GPU hang recovery step (channel restart, engine reset, scheduler reset and resume, command-streamer reset) with the render engine's reset and ring registers in the `WEXGPUResetTrace` registry property. It does not change recovery.
+-Experimental: `-wex-reset-restore` saves the render engine's mode, status-page and chicken registers just before a render-domain GPU hang reset and writes them back after the reset, before work is replayed, on GPUs where the reset clears them. It also enables the reset trace.
++Experimental: `-wex-reset-restore` saves the render engine's mode, status-page, chicken and user-mode whitelist registers just before a render-domain GPU hang reset and writes them back after the reset, before work is replayed, on GPUs where the reset clears them. It also enables the reset trace.
+ Experimental: `-wex-no-multicontext` disables the donor's second (multi-context compute) command streamer, so compute work runs on the render engine.
+ `-wex-adlp-load-only` blocks both native framebuffer and accelerator probes/starts on a selected ADL-P/RPL-P device, for load-only diagnostics without GPU initialization.
+ `-wex-display13-offline` keeps native display controller initialization enabled on Alder Lake-N / Twin Lake and Alder Lake-H/P/U / Raptor Lake-H/P/U but reports selected outputs as disconnected, isolating HPD/EDID and mode programming for framebuffer diagnostics. It does not establish display operation.
+diff --git a/README_ja.md b/README_ja.md
+index cc9d188..2e9ada1 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -144,7 +144,7 @@ Alder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/UではGPU資源
+ 
+ 開発時の一時診断用に `-wex-adlp-readout` を指定すると、GPUドライバの受付を閉じたままADL-Pの起動資源を採取します。対応済みハードウェアでは不要です。ファームウェアが設定したeDP経路（トランスコーダ、PPS、バックライト、PSR、PLL、Combo PHY Aのレジスタ）とVBT、およびアイドル状態のAUX A経由で読み出したシンクのDPCDも記録します。DPCDの読み出しを省くには `-wex-adlp-readout-noaux` を追加します。
+ 開発時の一時診断用に `-wex-reset-trace` を指定すると、GPUハングからの回復処理の各段階（チャネル再起動、エンジンリセット、スケジューラのリセットと再開、コマンドストリーマのリセット）を、レンダーエンジンのリセット関連およびリングのレジスタとともに `WEXGPUResetTrace` レジストリプロパティへ記録します。回復処理の動作は変更しません。
+-実験的機能: `-wex-reset-restore` を指定すると、レンダードメインのGPUハングリセットの直前にレンダーエンジンのモード、ステータスページ、チキンの各レジスタを保存し、リセット後かつ処理の再投入前に書き戻します。リセットでこれらが消去されるGPU向けです。リセットのトレースも有効になります。
++実験的機能: `-wex-reset-restore` を指定すると、レンダードメインのGPUハングリセットの直前にレンダーエンジンのモード、ステータスページ、チキン、ユーザーモード許可リストの各レジスタを保存し、リセット後かつ処理の再投入前に書き戻します。リセットでこれらが消去されるGPU向けです。リセットのトレースも有効になります。
+ 実験的機能: `-wex-no-multicontext` を指定すると、ドナーの2番目の（マルチコンテキスト・コンピュート）コマンドストリーマを無効にし、コンピュート処理をレンダーエンジンで実行します。
+ `-wex-adlp-load-only` は選択済みADL-P/RPL-Pで、FramebufferとAccelerator両方のnative probe/startを止め、GPUを初期化せずにロード段階を診断します。
+ `-wex-display13-offline` はAlder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/Uのnative display controller初期化を有効に保ち、選択した出力を未接続として扱います。FB診断でHPD/EDIDとmode設定を切り離すための設定で、表示成立を意味しません。
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 2e113c7..2e53f10 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -11115,7 +11115,11 @@ static bool gpuResetTraceSerialize(void *,void *,OSSerialize *serializer) {
+ struct GPUResetRCSRegister {uint32_t reg;bool masked;};
+ static const GPUResetRCSRegister gpuResetRCSRegisters[] {{0x229C,true},{0x2080,false},{0x209C,true},{0x20C0,true},
+  {0x2090,true},{0x7000,true},{0x7004,true},{0x20E0,true},{0x20E4,true},{0x20EC,true},{0x2580,true},
+- {0x7010,true},{0xE194,true},{0x20A0,false},{0x4090,false},{0x9430,false},{0x0D08,false},{0xB004,false}};
++ {0x7010,true},{0xE194,true},{0x20A0,false},{0x4090,false},{0x9430,false},{0x0D08,false},{0xB004,false},
++ // RC_PWRCTX_MAX, EMR and the user-mode register whitelist (FORCE_TO_NONPRIV
++ // 0..11): without it the donor's Metal/VA drivers lose their LRI targets.
++ {0x2054,false},{0x20B4,false},{0x24D0,false},{0x24D4,false},{0x24D8,false},{0x24DC,false},{0x24E0,false},
++ {0x24E4,false},{0x24E8,false},{0x24EC,false},{0x24F0,false},{0x24F4,false},{0x24F8,false},{0x24FC,false}};
+ static bool gpuResetRestoreOn,gpuResetRCSValid;
+ static void (*gpuResetForceWake)(void *,bool,unsigned);
+ static uint32_t gpuResetRCSSaved[arrsize(gpuResetRCSRegisters)];

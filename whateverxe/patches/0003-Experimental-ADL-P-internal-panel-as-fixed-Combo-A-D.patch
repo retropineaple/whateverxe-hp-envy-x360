@@ -1,0 +1,479 @@
+From 3086562d5a213e998cacfe1739a0df9d5ec15083 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 09:50:19 +0530
+Subject: [PATCH 03/47] Experimental ADL-P internal panel as fixed Combo A DP
+ (-wex-adlp-edp)
+
+Opt-in route for mobile Display13 laptops whose eDP panel sits on Combo A:
+- VBT: keep the first child per DDI (Linux semantics) and prefer DDI A
+  as the panel when the firmware describes internal DP on A and B.
+- Wiring: admit Combo A fixed DP and rewrite the donor panel record to
+  the fixed Combo DP record; strict upstream behaviour is unchanged.
+- Install the shared training lease adapter and DPBoot13 contract for
+  Combo-only DP using the provider's Combo DP probe capability.
+- Fix Combo TRANS_CLK_SEL (DDI+1) and lease-stop checks for Combo DDIs.
+- Boot handoff checks the whole firmware surface, not an FHD-sized prefix.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_display13_boot.hpp        |  5 +-
+ WhateverXe/kern_display13_fb_topology.hpp |  6 +-
+ WhateverXe/kern_display13_firmware.hpp    | 11 +++
+ WhateverXe/kern_firmware.cpp              | 11 ++-
+ WhateverXe/kern_vbt.hpp                   | 19 ++++--
+ WhateverXe/kern_xe.cpp                    | 42 +++++++++---
+ WhateverXe/kern_xe.hpp                    |  5 ++
+ tests/adlp_fb_candidate.py                |  1 +
+ tests/adlp_panel_dp.cpp                   | 82 +++++++++++++++++++++++
+ tests/display_contract_adapter.py         |  1 +
+ tests/firmware_readout.py                 |  4 +-
+ tests/fixtures/boot_argument_names.json   |  1 +
+ 12 files changed, 169 insertions(+), 19 deletions(-)
+ create mode 100644 tests/adlp_panel_dp.cpp
+
+diff --git a/WhateverXe/kern_display13_boot.hpp b/WhateverXe/kern_display13_boot.hpp
+index d048343..3094965 100644
+--- a/WhateverXe/kern_display13_boot.hpp
++++ b/WhateverXe/kern_display13_boot.hpp
+@@ -19,7 +19,10 @@ template<class IO> bool reservedPrefix(IO &io,const AlderLakeN::DisplayReadout &
+                                       AlderLakeN::GOPProtocol protocol=AlderLakeN::GOPProtocol::TMDS) {
+     AlderLakeN::LinearPlan plan;
+     if(!bootstrapReady || AlderLakeN::linearPlan(display,plan,ddi,protocol,tc)!=AlderLakeN::LinearStatus::Ready ||
+-       plan.pipe!=0 || !memory.range(plan.surface,AlderLakeN::ScanoutBytes,true))return false;
++       plan.pipe!=0 ||
++       // The whole firmware surface must lie in the reserved range, including
++       // panels larger than the FHD-sized default reservation.
++       !memory.range(plan.surface,plan.geometry.bytes>AlderLakeN::ScanoutBytes ? plan.geometry.bytes : AlderLakeN::ScanoutBytes,true))return false;
+     const auto stable=[&] {
+         return AlderLakeN::bootGeometryUnchanged(io,display,plan.pipe) &&
+             (ddi<3 || (tc && tc->unchanged(io))) &&
+diff --git a/WhateverXe/kern_display13_fb_topology.hpp b/WhateverXe/kern_display13_fb_topology.hpp
+index 1915799..1937be0 100644
+--- a/WhateverXe/kern_display13_fb_topology.hpp
++++ b/WhateverXe/kern_display13_fb_topology.hpp
+@@ -15,10 +15,12 @@ inline bool selectedWiring(const Display13OutputWiring &w) {
+ inline bool adlnWiring(const Display13OutputWiring &w) {return selectedWiring(w) && !(w.selected()&~3U);}
+ // DP topology is composable, but runtime admission stays closed until its
+ // complete signal/training/bootstrap operation contract is installed.
+-inline bool supportedWiring(const Display13OutputWiring &w,bool fixedTC=false) {
++inline bool supportedWiring(const Display13OutputWiring &w,bool fixedTC=false,uint32_t comboDP=0) {
+     // Fixed HDMI is composable across the physical Combo A/B and TC1..4.
+     // TC provider capability, legacy mode and clock hooks are checked separately.
+-    return !(w.dp&~0x78U) && w.described() && !(w.selected()&~(fixedTC ? Display13OutputWiring::Physical : 3U));
++    // comboDP admits an explicitly enabled fixed Combo DP route (Combo A only).
++    return !(comboDP&~1U) && !(w.dp&~(0x78U|comboDP)) && w.described() &&
++        !(w.selected()&~(fixedTC ? Display13OutputWiring::Physical : 3U));
+ }
+ // A TC route uses the same validated handoff regardless of the GT family.
+ // Keep the established Combo-only ADL-N startup ordering unchanged.
+diff --git a/WhateverXe/kern_display13_firmware.hpp b/WhateverXe/kern_display13_firmware.hpp
+index abbb98f..e0e2738 100644
+--- a/WhateverXe/kern_display13_firmware.hpp
++++ b/WhateverXe/kern_display13_firmware.hpp
+@@ -35,6 +35,17 @@ namespace XELP { namespace VBT {
+         }
+         return w;
+     }
++    // Experimental: an internal DP panel the VBT places on Combo A with AUX A.
++    // Linux treats this as eDP; the caller drives it as a fixed Combo DP sink
++    // and must separately prove the firmware-lit route before admission.
++    inline uint32_t display13PanelDP(const Ports &ports) {
++        const auto &p=ports.port[0];
++        if(!ports.valid() || !ports.panel.valid || ports.panel.ddi!=0 || !(ports.present&1) ||
++           !p.internal() || !p.dp() || (p.type&(0x400|0x20|1)) || p.aux!=0x40)return 0;
++        for(unsigned other=1;other<PortCount;++other)if((ports.present&(1U<<other)) &&
++            ports.port[other].dp() && ports.port[other].aux==0x40)return 0;
++        return 1;
++    }
+ 
+ } }
+ #endif
+diff --git a/WhateverXe/kern_firmware.cpp b/WhateverXe/kern_firmware.cpp
+index 8eb9167..2499ba0 100644
+--- a/WhateverXe/kern_firmware.cpp
++++ b/WhateverXe/kern_firmware.cpp
+@@ -1,4 +1,5 @@
+ #include "kern_xe.hpp"
++#include "kern_display13_firmware.hpp"
+ #include <IOKit/pci/IOPCIDevice.h>
+ #include <IOKit/IOMemoryDescriptor.h>
+ 
+@@ -12,6 +13,7 @@ static void publishBytes(IOPCIDevice *pci,const char *key,const void *bytes,unsi
+ void XE::xelpReadFirmware(IOPCIDevice *pci) {
+     // Wiring is needed by framebuffer-only profiles before Render is admitted.
+     if(!pci || !xeProfile.displayAdmitted())return;
++    display13PanelDP=xeProfile.mobileDisplay13() && checkKernelArgument("-wex-adlp-edp");
+     const uint32_t asls=pci->configRead32(0xFC);
+     uint32_t source=0;
+     if(asls && asls<=0xFFFFE000U) {
+@@ -31,7 +33,7 @@ void XE::xelpReadFirmware(IOPCIDevice *pci) {
+                         const auto data=reinterpret_cast<const void *>(vbtMap->getVirtualAddress());
+                         // Raw firmware table for diagnosis, published even when admission rejects it.
+                         publishBytes(pci,"WhateverXeVBTRaw",data,region.bytes);
+-                        firmwarePorts=XELP::VBT::parse(data,region.bytes,xeProfile.family);
++                        firmwarePorts=XELP::VBT::parse(data,region.bytes,xeProfile.family,display13PanelDP);
+                         if(firmwarePorts.valid()){source=2;publishBytes(pci,"TGLVBT",data,firmwarePorts.bytes);}
+                     }
+                     if(vbtMap)vbtMap->release();
+@@ -39,7 +41,7 @@ void XE::xelpReadFirmware(IOPCIDevice *pci) {
+                 }
+                 if(!firmwarePorts.valid()) {
+                     if(!region.address)publishBytes(pci,"WhateverXeVBTRaw",bytes+0x400,region.inlineBytes);
+-                    const auto embedded=XELP::VBT::parse(bytes+0x400,region.inlineBytes,xeProfile.family);
++                    const auto embedded=XELP::VBT::parse(bytes+0x400,region.inlineBytes,xeProfile.family,display13PanelDP);
+                     if(embedded.valid()) {
+                         firmwarePorts=embedded;source=1;
+                         publishBytes(pci,"TGLVBT",bytes+0x400,firmwarePorts.bytes);
+@@ -60,4 +62,9 @@ void XE::xelpReadFirmware(IOPCIDevice *pci) {
+     const auto &panel=firmwarePorts.panel;
+     uint32_t panelFacts[]={panel.valid,panel.type,panel.ddi,panel.lowSwing,panel.hobl};
+     pci->setProperty("WhateverXeFirmwarePanel",panelFacts,sizeof(panelFacts));
++    if(display13PanelDP) {
++        uint32_t edp[]={1,firmwarePorts.duplicates,XELP::VBT::display13PanelDP(firmwarePorts),
++            panel.backlightValid,panel.pwmPresent,panel.backlightType,panel.controller};
++        pci->setProperty("WEXADLPPanelDP",edp,sizeof(edp));
++    }
+ }
+diff --git a/WhateverXe/kern_vbt.hpp b/WhateverXe/kern_vbt.hpp
+index a8022a2..2b9acae 100644
+--- a/WhateverXe/kern_vbt.hpp
++++ b/WhateverXe/kern_vbt.hpp
+@@ -27,6 +27,9 @@ struct Port {
+ struct Ports {
+     Status status {Status::Missing};
+     uint32_t version {},bytes {},present {},unmapped {},ambiguous {};
++    // Later children for an already-described DDI, ignored like Linux
++    // parse_ddi_ports ("using the first") when the caller opts in.
++    uint32_t duplicates {};
+     uint32_t checksum {};
+     struct Panel {
+         bool valid {},lowSwing {},hobl {};
+@@ -88,7 +91,7 @@ struct Ports {
+ };
+ // Optional panel facts must never weaken General Definitions admission or
+ // make an unrelated malformed firmware tail reject usable connector facts.
+-inline void panelFacts(const uint8_t *b,size_t header,size_t size,Ports &ports) {
++inline void panelFacts(const uint8_t *b,size_t header,size_t size,Ports &ports,bool preferA=false) {
+     const uint8_t *options=nullptr,*edp=nullptr,*power=nullptr,*backlight=nullptr;
+     size_t optionsSize=0,edpSize=0,powerSize=0,backlightSize=0;
+     bool duplicate=false,backlightDuplicate=false;
+@@ -110,8 +113,13 @@ inline void panelFacts(const uint8_t *b,size_t header,size_t size,Ports &ports)
+     if(duplicate || !options || optionsSize<1 || options[0]>=16 ||
+        !edp || edpSize<212 || (ports.version>=232 && (!power || powerSize<56)))return;
+     unsigned internal=PortCount;
++    // Shared multi-SKU VBTs can describe internal DP on both Combo A and B.
++    // With preferA, DDI A is the panel; the caller must still prove the live
++    // firmware route before using it.
++    const bool aPanel=preferA && (ports.present&1) && ports.port[0].internal() && ports.port[0].dp();
+     for(unsigned d=0;d<PortCount;++d)if((ports.present&(1U<<d)) &&
+         ports.port[d].internal() && ports.port[d].dp()) {
++        if(aPanel){internal=0;break;}
+         if(internal!=PortCount)return; // no guessed panel/connector association
+         internal=d;
+     }
+@@ -144,7 +152,7 @@ inline uint32_t ddi(Family family,uint32_t dvo) {
+     }
+     return PortCount;
+ }
+-inline Ports parse(const void *data,size_t length,Family family) {
++inline Ports parse(const void *data,size_t length,Family family,bool firstWins=false) {
+     Ports r;
+     if(!data || !length)return r;
+     if(displayAdapter(family)==DisplayAdapter::Unknown){r.status=Status::Platform;return r;}
+@@ -187,12 +195,15 @@ inline Ports parse(const void *data,size_t length,Family family) {
+         if(!(type&2))continue;
+         const auto d=ddi(family,c[16]);
+         if(d==PortCount){++r.unmapped;continue;}
+-        if(r.present&(1U<<d)){r.status=Status::Conflict;return r;}
++        if(r.present&(1U<<d)) {
++            if(!firstWins){r.status=Status::Conflict;return r;}
++            ++r.duplicates;continue;
++        }
+         auto &q=r.port[d];q.type=type;q.dvo=c[16];q.ddc=c[19];q.aux=c[25];q.flags=c[23];q.capabilities=c[33];q.hdmiPreset=c[7]&31;
+         r.present|=1U<<d;
+         if(!q.fixedTMDS())r.ambiguous|=1U<<d;
+     }
+-    r.status=Status::Valid;panelFacts(b,bh,bs,r);return r;
++    r.status=Status::Valid;panelFacts(b,bh,bs,r,firstWins);return r;
+ }
+ // OpRegion acquisition descriptor, kept pure for malformed/overflow testing.
+ struct Region {uint64_t address {};uint32_t bytes {},inlineBytes {};bool valid {};};
+diff --git a/WhateverXe/kern_xe.cpp b/WhateverXe/kern_xe.cpp
+index 1409ed0..0bd861a 100644
+--- a/WhateverXe/kern_xe.cpp
++++ b/WhateverXe/kern_xe.cpp
+@@ -3849,7 +3849,12 @@ Display13OutputWiring XE::display13BoardWiring(IOService *provider) {
+     if(!xeProfile.displayAdmitted() || xeProfile.display!=XELP::Display::XeLPD)return {};
+     // Display13 physical capacity is shared by ADL-N and mobile ADL/RPL.
+     // VBT chooses board routing; a family name must not exclude TC PHYs.
+-    if(!property)return XELP::VBT::display13Fixed(firmwarePorts,Display13OutputWiring::Physical);
++    if(!property) {
++        auto w=XELP::VBT::display13Fixed(firmwarePorts,Display13OutputWiring::Physical);
++        // -wex-adlp-edp: add the VBT internal panel on Combo A as fixed DP.
++        if(display13PanelDP && w.valid)w.dp|=XELP::VBT::display13PanelDP(firmwarePorts)&~w.hdmi;
++        return w;
++    }
+     // Preserve the older ADL-N Combo property contract. It cannot select TC.
+     if(adlpDisplaySelected)return {};
+     auto wiring=OSDynamicCast(OSData,property);
+@@ -3875,7 +3880,7 @@ void XE::adlnBootstrap(IOPCIDevice *pci) {
+ 	// Bootstrap runs before framebuffer start loads its board policy. Native
+ 	// GOP qualification must already use that physical port, not assume B.
+     const auto board=display13BoardWiring(pci);adlnOutputWiring=board;
+-    if(displayRequested && !Display13FBTopology::supportedWiring(board,xeProfile.display==XELP::Display::XeLPD)) {
++    if(displayRequested && !Display13FBTopology::supportedWiring(board,xeProfile.display==XELP::Display::XeLPD,display13ComboDP())) {
+         pci->setProperty("N97NativeRoutingUnavailable",true);return;
+     }
+ 	auto bootDDI=displayRequested ? UINT32_MAX : 1U;
+@@ -4176,9 +4181,11 @@ bool XE::xelpBindProbe(void *controller) {
+         config.legacyBackend=tglAUXParentMask;
+     } else {
+         if(!display13FBTopologyHooksReady || controller!=adlnTopologyController ||
+-            !Display13FBTopology::supportedWiring(adlnOutputWiring,xeProfile.display==XELP::Display::XeLPD) ||
++            !Display13FBTopology::supportedWiring(adlnOutputWiring,xeProfile.display==XELP::Display::XeLPD,display13ComboDP()) ||
+             ((adlnOutputWiring.selected()&0x78) && (!display13TCProbeReady || !display13FBTCHooksReady)) ||
+-            (adlnOutputWiring.dp && (!display13TCDPProbeReady || !display13FBSSTHooksReady || !display13FBAUXHooksReady)))return false;
++            ((adlnOutputWiring.dp&0x78) && !display13TCDPProbeReady) ||
++            ((adlnOutputWiring.dp&3) && !display13DPProbeReady) ||
++            (adlnOutputWiring.dp && (!display13FBSSTHooksReady || !display13FBAUXHooksReady)))return false;
+         config.combo=adlnOutputWiring.selected()&3;config.comboBackend=3;
+         config.legacy=adlnOutputWiring.selected()&0x78;config.legacyBackend=config.legacy?0x78:0;
+     }
+@@ -5289,6 +5296,13 @@ bool XE::processDisplay13Framebuffer(KernelPatcher &patcher,size_t index,mach_vm
+ 	display13FBOutputHooksReady=processDisplay13FramebufferOutput(patcher,index,address,size);
+     display13FBTCHooksReady=processDisplay13FramebufferTC(patcher,index,address,size);
+     IORegistryEntry::getRegistryRoot()->setProperty("WEXDisplay13TCHooksReady",display13FBTCHooksReady);
++    // -wex-adlp-edp: Combo-only fixed DP uses the native Combo clock routes
++    // installed by the output stage plus the shared training lease adapter.
++    if(display13PanelDP && (adlnOutputWiring.dp&3) && !(adlnOutputWiring.selected()&0x78)) {
++        display13ComboDPReady=display13FBOutputHooksReady && display13FBSSTHooksReady && display13FBAUXHooksReady &&
++            processDisplay13Training(patcher,index,address,size);
++        IORegistryEntry::getRegistryRoot()->setProperty("WEXDisplay13ComboDPReady",display13ComboDPReady);
++    }
+ 	IORegistryEntry::getRegistryRoot()->setProperty("N97FBOutputHooksReady",display13FBOutputHooksReady);
+ 	display13FBGTTHooksReady=processDisplay13FramebufferGTT(patcher,index,address,size);
+ 	IORegistryEntry::getRegistryRoot()->setProperty("N97FBGTTHooksReady",display13FBGTTHooksReady);
+@@ -6386,7 +6400,7 @@ bool XE::processDisplay13FramebufferTopology(KernelPatcher &patcher,size_t index
+ bool XE::wrapAlderLakeNGetOSInformation(IOService *controller) {
+ 	auto s=callbackXE;
+ 	if(!s->display13FBTopologyHooksReady || !controller || controller->getMetaClass()->getClassSize()<0x1C20 ||
+-		!Display13FBTopology::supportedWiring(s->adlnOutputWiring,s->xeProfile.display==XELP::Display::XeLPD) || !checkKernelArgument("-disablegfxfirmware"))return false;
++		!Display13FBTopology::supportedWiring(s->adlnOutputWiring,s->xeProfile.display==XELP::Display::XeLPD,s->display13ComboDP()) || !checkKernelArgument("-disablegfxfirmware"))return false;
+ 	if(!FunctionCast(wrapAlderLakeNGetOSInformation,s->orgAlderLakeNGetOSInformation)(controller))return false;
+ 	auto platform=Display13FBMemory::field<void *>(controller,0xD40);
+ 	if(!Display13FBTopology::apply(s->adlnPlatform,sizeof(s->adlnPlatform),platform,s->adlnOutputWiring))return false;
+@@ -7047,7 +7061,7 @@ bool XE::processFramebufferTraining(KernelPatcher &patcher,size_t index,mach_vm_
+ bool XE::processDisplay13Training(KernelPatcher &patcher,size_t index,mach_vm_address_t address,size_t size) {
+  if(!adlnOutputWiring.dp)return true;
+  using namespace FramebufferTrainingNative;
+- if(!framebufferTrainingHooksReady || !display13FBDPHooksReady || !display13FBSSTHooksReady ||
++ if(!framebufferTrainingHooksReady || (!display13FBDPHooksReady && (adlnOutputWiring.dp&0x78)) || !display13FBSSTHooksReady ||
+     !display13FBPowerReferencesReady || !orgDisplay13GMBusWrite)return false;
+  const auto &e=entries[PortTrain];
+  const auto fn=patcher.solveSymbol<mach_vm_address_t>(index,e.symbol,address,size);patcher.clearError();
+@@ -7088,7 +7102,14 @@ bool XE::display13LeaseStop(void *controller,void *port) {
+   IOLockLock(c.lock);auto p=display13SSTPort(port);bool ok=false;
+   if(p) {
+    const auto ddi=Display13FBMemory::field<uint32_t>(p,0x120);Display13TC::Port phy;
+-   if(Display13TC::Port::resolve(ddi,phy)) {
++   if(ddi<2) {
++    // Combo DP: buffer stopped and DPCLKA_CFGCR0 DDI clock gated (bit 10+ddi),
++    // with no native DDI reference left by an aborted enable.
++    Display13FBSSTIO io{c.map};
++    const auto buffer=io.read(0x64000+0x100*ddi),mux=io.read(0x164280);
++    ok=buffer!=UINT32_MAX && mux!=UINT32_MAX && !(buffer&0x80000000U) &&
++     (mux&(1U<<(10+ddi))) && !c.bridge.nativeDDIRefs(ddi);
++   } else if(Display13TC::Port::resolve(ddi,phy)) {
+     Display13FBTCIO io{static_cast<OSObject *>(port),ddi-3};
+     if(io.powerHeld()) {
+      const auto pll=io.read(phy.pll);
+@@ -7177,7 +7198,7 @@ bool XE::display13StopTranscoder(void *port) {
+   auto &deferred=display13DeferredClocks[pipe];
+   ok=buffer!=UINT32_MAX && conf!=UINT32_MAX && func!=UINT32_MAX && tp!=UINT32_MAX && clock!=UINT32_MAX &&
+    !(buffer&0x80000000U) && !(conf&0xc0000000U) && !((func|tp)&0x80000000U) &&
+-   (!(clock&0xf0000000U) || (clock>>28)==ddi+3) && (!deferred.pending || deferred.port==port);
++   (!(clock&0xf0000000U) || (clock>>28)==(ddi<3?ddi+1:ddi+3)) && (!deferred.pending || deferred.port==port);
+   if(ok) {
+    if(!(buffer&0x80U))IODelay(8); // DDI disable: idle or >=8us before clock removal.
+    const auto value=deferred.pending?deferred.value:(clock&0x0fffffffU);
+@@ -7909,7 +7930,7 @@ bool XE::wrapDisplay13FramebufferStart(IOService *that,IOService *provider) {
+ 	if(s->tglObservationController==that)s->tglObservationController=nullptr;
+ 	if(!pci)return false;
+     const auto board=s->display13BoardWiring(provider);
+-    if(!Display13FBTopology::supportedWiring(board,s->xeProfile.display==XELP::Display::XeLPD) ||
++    if(!Display13FBTopology::supportedWiring(board,s->xeProfile.display==XELP::Display::XeLPD,s->display13ComboDP()) ||
+        board.selected()!=s->adlnOutputWiring.selected())return false;
+     if((board.selected()&0x78) && (!s->display13FBTCHooksReady || !s->display13TCProbeReady)) {
+         IORegistryEntry::getRegistryRoot()->setProperty("ADLPFBTCUnavailable",true);return false;
+@@ -13026,6 +13047,9 @@ XELP::DisplayContract::Mask XE::display13Available() const {
+  // Fixed TC DP supports cold training and an explicitly validated SST GOP.
+  // Boot source, memory, Mode/AUX and native path adoption are all required.
+  if(display13FBDPHooksReady && display13TCDPProbeReady)a|=C::DPBoot13;
++ // Combo-only fixed DP (-wex-adlp-edp): the Combo boot AUX hold/adopt path
++ // replaces Mode, so the provider's Combo DP capability is the probe proof.
++ if(display13ComboDPReady && display13DPProbeReady && !(adlnOutputWiring.dp&0x78))a|=C::DPBoot13;
+  if(display13TrainingReady)a|=C::Training12;
+  if(display13FramingReady)a|=C::Framing;
+  if(!display13ClockOrderReady)a&=~C::ClockOrder;
+diff --git a/WhateverXe/kern_xe.hpp b/WhateverXe/kern_xe.hpp
+index e41739b..dc4fb60 100644
+--- a/WhateverXe/kern_xe.hpp
++++ b/WhateverXe/kern_xe.hpp
+@@ -121,6 +121,11 @@ private:
+     XELP::SmallGTResources display12SmallGT;
+     XELP::Profile xeProfile;
+     XELP::VBT::Ports firmwarePorts;
++    // -wex-adlp-edp: experimental ADL-P/U internal panel on Combo A, driven
++    // through the fixed Combo DP SST backend. Off by default.
++    bool display13PanelDP {};
++    uint32_t display13ComboDP() const {return display13PanelDP ? 1U : 0U;}
++    bool display13ComboDPReady {};
+     void xelpReadFirmware(IOPCIDevice *pci);
+     void xelpLoadDisplayPool(IOService *provider);
+     bool xelpInstallHostRPS(KernelPatcher &,size_t,mach_vm_address_t,size_t);
+diff --git a/tests/adlp_fb_candidate.py b/tests/adlp_fb_candidate.py
+index e353420..967bede 100644
+--- a/tests/adlp_fb_candidate.py
++++ b/tests/adlp_fb_candidate.py
+@@ -21,6 +21,7 @@ bool configure(void *c,const XELP::ProbeConfig *p){assert(c==(void*)1);seen=*p;+
+ struct XE {
+  XELP::Profile xeProfile=XELP::identify(0x46A68086,12,0x9A498086);
+  XELP::VBT::Ports firmwarePorts;
++ bool display13PanelDP=false;uint32_t display13ComboDP() const {return display13PanelDP?1U:0U;}
+  bool adlpDisplaySelected=true,adlsDisplaySelected=false,tglHDMIWiringApplied=false,tglTCWiringLoaded=false;
+  bool display13FBTopologyHooksReady=true,display13TCProbeReady=true,display13FBTCHooksReady=true;
+  bool display13TCDPProbeReady=true,display13DPProbeReady=false,display13FBSSTHooksReady=true,display13FBAUXHooksReady=true;
+diff --git a/tests/adlp_panel_dp.cpp b/tests/adlp_panel_dp.cpp
+new file mode 100644
+index 0000000..4797dc5
+--- /dev/null
++++ b/tests/adlp_panel_dp.cpp
+@@ -0,0 +1,82 @@
++#include <cassert>
++#include <cstdio>
++#include <cstring>
++#include <vector>
++#include "kern_vbt.hpp"
++#include "kern_display13_firmware.hpp"
++#include "kern_display13_fb_topology.hpp"
++using namespace XELP;
++using namespace XELP::VBT;
++static void w16(std::vector<uint8_t>&b,size_t at,uint16_t v){b[at]=uint8_t(v);b[at+1]=uint8_t(v>>8);}
++static void w32(std::vector<uint8_t>&b,size_t at,uint32_t v){w16(b,at,uint16_t(v));w16(b,at+2,uint16_t(v>>16));}
++// General Definitions plus optional panel blocks 40/27/44 (BDB 250).
++static std::vector<uint8_t> table(const std::vector<Port>&ports,bool panel) {
++    const size_t children=5+39*ports.size();
++    const size_t blocks=3+children+(panel?(3+1)+(3+212)+(3+56):0);
++    std::vector<uint8_t> b(48+22+blocks);
++    memcpy(b.data(),"$VBT",4);w16(b,20,100);w16(b,22,48);w16(b,24,uint16_t(b.size()));w32(b,28,48);
++    memcpy(b.data()+48,"BIOS_DATA_BLOCK ",16);w16(b,64,250);w16(b,66,22);w16(b,68,uint16_t(b.size()-48));
++    size_t at=70;b[at]=2;w16(b,at+1,uint16_t(children));b[at+3+4]=39;
++    for(size_t i=0;i<ports.size();++i) {
++        auto c=at+3+5+39*i;const auto &p=ports[i];w16(b,c+2,uint16_t(p.type));
++        b[c+16]=uint8_t(p.dvo);b[c+19]=uint8_t(p.ddc);b[c+25]=uint8_t(p.aux);b[c+23]=uint8_t(p.flags);b[c+33]=uint8_t(p.capabilities);
++    }
++    at+=3+children;
++    if(panel) {
++        b[at]=40;w16(b,at+1,1);b[at+3]=2;at+=4;          // panel type 2
++        b[at]=27;w16(b,at+1,212);w16(b,at+3+20,2100);at+=3+212; // T1+T3 for type 2
++        b[at]=44;w16(b,at+1,56);at+=3+56;
++    }
++    return b;
++}
++int main() {
++    // HP Envy x360 13-bf shape: internal DP on Combo A and B, then a later
++    // child for B again. Strict parsing keeps the upstream Conflict verdict.
++    const std::vector<Port> envy {{0x1806,10,3,0x40,0xc0,0},{0x1806,7,0,0x10,0xc0,0},{0x60d2,1,2,0,0,0}};
++    auto bytes=table(envy,true);
++    auto strict=parse(bytes.data(),bytes.size(),Family::AlderLakeP);
++    assert(strict.status==Status::Conflict && !display13PanelDP(strict));
++    auto tolerant=parse(bytes.data(),bytes.size(),Family::AlderLakeP,true);
++    assert(tolerant.valid() && tolerant.present==3 && tolerant.duplicates==1);
++    assert(tolerant.port[1].type==0x1806); // first child for B wins, as in Linux
++    assert(tolerant.panel.valid && tolerant.panel.ddi==0 && tolerant.panel.type==2 && tolerant.panel.delays[0]==2100);
++    assert(display13PanelDP(tolerant)==1);
++    // Two internal panels without preferA remain unassociated.
++    auto twoPanels=parse(bytes.data(),bytes.size(),Family::AlderLakeP,false);
++    assert(!twoPanels.panel.valid);
++    // The Combo A DP route is not offered for a non-A panel, a shared AUX A,
++    // an HDMI A record or a VBT without panel blocks.
++    auto noPanel=table(envy,false);auto q=parse(noPanel.data(),noPanel.size(),Family::AlderLakeP,true);
++    assert(q.valid() && !q.panel.valid && !display13PanelDP(q));
++    auto shared=tolerant;shared.present|=1U<<3;shared.port[3]={0x68c6,9,0,0x40,0xc0,0};
++    assert(!display13PanelDP(shared));
++    auto hdmiA=tolerant;hdmiA.port[0].type=0x60d2;assert(!display13PanelDP(hdmiA));
++    auto bPanel=tolerant;bPanel.panel.ddi=1;assert(!display13PanelDP(bPanel));
++
++    // Wiring: Combo A fixed DP is admitted only with the explicit comboDP mask.
++    Display13OutputWiring w;w.valid=true;w.dp=1;
++    assert(w.described() && !Display13FBTopology::supportedWiring(w,true) &&
++        Display13FBTopology::supportedWiring(w,true,1));
++    assert(!Display13FBTopology::supportedWiring(w,true,2)); // Combo B is not part of this route.
++    auto b=w;b.dp=2;assert(!Display13FBTopology::supportedWiring(b,true,1));
++    // The firmware DP GOP on DDI A selects the boot connector only via DP.
++    assert(Display13FBTopology::bootDDI(w,0x8A010106,true)==0);
++    assert(Display13FBTopology::bootDDI(w,0x8A010106,false)==UINT32_MAX);
++    // Native platform: the panel record becomes the fixed Combo DP record.
++    std::vector<uint8_t> in(Display13FBTopology::Bytes),out(Display13FBTopology::Bytes);
++    in[0x12]=9;
++    for(unsigned d=0;d<9;++d) {
++        uint32_t rec[6]={d,d<3?d+1:d+6,1,d<3?0U:1U,0x400,0x201};
++        if(!d){uint32_t panel[6]={0,0,0,0,2,0x18};memcpy(rec,panel,24);}
++        if(d==1){uint32_t comboB[6]={1,2,1,0,0x400,0x201};memcpy(rec,comboB,24);}
++        memcpy(in.data()+0x20+24*d,rec,24);
++    }
++    assert(Display13FBTopology::apply(out.data(),Display13FBTopology::Bytes,in.data(),w));
++    const uint32_t expectA[6]={0,1,1,0,0x400,0x201};
++    assert(!memcmp(out.data()+0x20,expectA,24));
++    assert(w.matches(reinterpret_cast<const uint32_t *>(out.data()+0x20)));
++    uint32_t excluded[2];memcpy(excluded,out.data()+0x20+24+16,8);assert(excluded[0]==1 && excluded[1]==0);
++    // Hotplug keeps Combo A and masks Combo B/C plus every TC source.
++    assert(Display13FBTopology::excludedHotplug(out.data(),Display13FBTopology::Bytes,w)==(0x3F000000U|(6U<<16)));
++    puts("adlp_panel_dp ok");
++}
+diff --git a/tests/display_contract_adapter.py b/tests/display_contract_adapter.py
+index 7f3674f..f5a1b9d 100644
+--- a/tests/display_contract_adapter.py
++++ b/tests/display_contract_adapter.py
+@@ -17,6 +17,7 @@ using C=XELP::DisplayContract;
+ struct State {
+ FIELDS
+  bool display13FBDPHooksReady=false,display13TCDPProbeReady=false,display13ClockOrderReady=true;
++ bool display13ComboDPReady=false;struct {unsigned dp=0;}adlnOutputWiring;
+  struct Native {bool valid=true;bool complete()const{return valid;}}tglTCNativeFunctions;
+  bool tglHDMIB=false,adlsDisplaySelected=false,tglTrainingLeaseRequested=true;
+  struct {struct {bool valid=false;}panel;}firmwarePorts;
+diff --git a/tests/firmware_readout.py b/tests/firmware_readout.py
+index 7f55bea..4be84bc 100644
+--- a/tests/firmware_readout.py
++++ b/tests/firmware_readout.py
+@@ -9,6 +9,8 @@ code=r'''
+ #include <cstdio>
+ #include "kern_xelp_platform.hpp"
+ #include "kern_vbt.hpp"
++#include "kern_display13_firmware.hpp"
++static bool checkKernelArgument(const char*){return false;}
+ constexpr unsigned kIODirectionIn=1,kIOMapReadOnly=2;
+ struct OSData {static OSData *withBytes(const void*,unsigned){static OSData d;return &d;}void release(){}};
+ struct IOMemoryDescriptor {
+@@ -19,7 +21,7 @@ struct IOMemoryDescriptor {
+ struct IOPCIDevice {unsigned reads=0,publications=0;uint32_t configRead32(unsigned off){assert(off==0xfc);++reads;return 0;}
+  void setProperty(const char*,uint32_t,unsigned){++publications;}void setProperty(const char*,const void*,unsigned){++publications;}void setProperty(const char*,OSData*){++publications;}
+ };
+-struct XE {XELP::Profile xeProfile;XELP::VBT::Ports firmwarePorts;void xelpReadFirmware(IOPCIDevice*);};
++struct XE {XELP::Profile xeProfile;XELP::VBT::Ports firmwarePorts;bool display13PanelDP {};void xelpReadFirmware(IOPCIDevice*);};
+ BODY
+ int main(){
+  for(unsigned kind=0;kind<5;++kind){XE x;IOPCIDevice pci;
+diff --git a/tests/fixtures/boot_argument_names.json b/tests/fixtures/boot_argument_names.json
+index ffa6ced..4c58344 100644
+--- a/tests/fixtures/boot_argument_names.json
++++ b/tests/fixtures/boot_argument_names.json
+@@ -138,6 +138,7 @@
+   "-wex-display-trace": [],
+   "-wex-adlp-readout": [],
+   "-wex-adlp-readout-noaux": [],
++  "-wex-adlp-edp": [],
+   "-wex-adlp-load-only": [],
+   "-wex-display13-offline": []
+ }

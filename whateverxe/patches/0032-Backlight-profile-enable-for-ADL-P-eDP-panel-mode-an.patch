@@ -1,0 +1,109 @@
+From 059b5d24da174c936c23a54027bca078ad3d4062 Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Tue, 27 Oct 2026 20:12:11 +0530
+Subject: [PATCH 32/47] Backlight profile: enable for ADL-P eDP panel mode and
+ key it by the PNLF UID
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ WhateverXe/kern_host.cpp   | 17 ++++++++++++-----
+ WhateverXe/kern_host.hpp   |  2 ++
+ tests/backlight_adapter.py |  4 ++--
+ tests/host_publication.py  |  3 ++-
+ 4 files changed, 18 insertions(+), 8 deletions(-)
+
+diff --git a/WhateverXe/kern_host.cpp b/WhateverXe/kern_host.cpp
+index a0b5de2..f42e20a 100644
+--- a/WhateverXe/kern_host.cpp
++++ b/WhateverXe/kern_host.cpp
+@@ -35,7 +35,8 @@ void XeHost::processKernel(KernelPatcher &patcher) {
+  // hooks even when the selected profile deliberately has no Render backend.
+  active=profile.displayAdmitted();
+  const auto display=XELP::displayAdapter(profile.family);
+- backlightEnabled=active && (display==XELP::DisplayAdapter::TGL || display==XELP::DisplayAdapter::ADLS) &&
++ backlightPanelEDP=active && display==XELP::DisplayAdapter::ADLP && checkKernelArgument("-wex-adlp-edp");
++ backlightEnabled=active && (display==XELP::DisplayAdapter::TGL || display==XELP::DisplayAdapter::ADLS || backlightPanelEDP) &&
+   info->firmwareVendor!=DeviceInfo::FirmwareVendor::Apple;
+  backlightGPU=backlightEnabled ? gpu : nullptr;
+  if(published) {
+@@ -112,12 +113,18 @@ bool XeHost::wrapPanelSetDisplay(IOService *panel,IOService *display) {
+  const bool range=owned && internal && framebuffer &&
+   framebuffer->getAttributeForConnection(0,'bklt',pwm)==kIOReturnSuccess;
+  OSDictionary *heldProfiles=nullptr;
++ // AppleIntelPanel selects F<UID>T<product>. The ADL-P eDP panel's SSDT-PNLF may
++ // report any UID; its 'bklt' range is WhateverXe's own 0..65535 DPCD scale.
++ unsigned uidValue=0;
++ if(uid)for(auto s=uid->getCStringNoCopy();*s>='0' && *s<='9' && uidValue<1000;++s)uidValue=uidValue*10+(*s-'0');
++ const unsigned profileUID=uidValue==19 || (callbackHost->backlightPanelEDP && uidValue) ? uidValue : 0;
+  if(range && uid && product && pwm[1]<=UINT32_MAX && pwm[2]<=UINT32_MAX &&
+-    XeBacklightProfile::eligible(uid->isEqualTo("19") ? 19 : 0,pwm[1],pwm[2],internal)) {
++    XeBacklightProfile::eligible(profileUID ? 19 : 0,pwm[1],pwm[2],internal)) {
+   auto original=OSDynamicCast(OSDictionary,panel->getProperty("ApplePanels"));
+   if(original && !panel->getProperty("ApplePanel")) {
+-   char key[32];snprintf(key,sizeof(key),"F19T%04x",product->unsigned32BitValue());
+-   if(!original->getObject(key) && !original->getObject("F19")) {
++   char key[32],family[16];snprintf(key,sizeof(key),"F%uT%04x",profileUID,product->unsigned32BitValue());
++   snprintf(family,sizeof(family),"F%u",profileUID);
++   if(!original->getObject(key) && !original->getObject(family)) {
+     auto copy=OSDictionary::withDictionary(original);
+     auto curve=OSData::withBytes(XeBacklightProfile::curve,sizeof(XeBacklightProfile::curve));
+     if(copy && curve && copy->setObject(key,curve) && panel->setProperty("ApplePanels",copy)) {
+@@ -131,7 +138,7 @@ bool XeHost::wrapPanelSetDisplay(IOService *panel,IOService *display) {
+    }
+   }
+  }
+- uint32_t inputs[]={1,owned,uid && uid->isEqualTo("19"),range ? static_cast<uint32_t>(pwm[1]) : ~0U,
++ uint32_t inputs[]={1,owned,profileUID,range ? static_cast<uint32_t>(pwm[1]) : ~0U,
+   range ? static_cast<uint32_t>(pwm[2]) : 0,0};
+  const bool result=FunctionCast(wrapPanelSetDisplay,callbackHost->orgPanelSetDisplay)(panel,display);
+  if(heldProfiles)heldProfiles->release();
+diff --git a/WhateverXe/kern_host.hpp b/WhateverXe/kern_host.hpp
+index 903b46f..34a4d80 100644
+--- a/WhateverXe/kern_host.hpp
++++ b/WhateverXe/kern_host.hpp
+@@ -10,6 +10,8 @@ private:
+  XE xe;
+  bool active {};
+  bool backlightEnabled {};
++ // -wex-adlp-edp: ADL-P AUX-brightness panel; profile key follows the PNLF UID.
++ bool backlightPanelEDP {};
+  IOPCIDevice *backlightGPU {};
+  mach_vm_address_t orgPanelSetDisplay {};
+  static bool wrapPanelSetDisplay(IOService *,IOService *);
+diff --git a/tests/backlight_adapter.py b/tests/backlight_adapter.py
+index 3e7319e..d87e0eb 100644
+--- a/tests/backlight_adapter.py
++++ b/tests/backlight_adapter.py
+@@ -20,7 +20,7 @@ struct Object {
+  void retain(){assert(alive && refs);++refs;}
+  void release(){assert(alive && refs);if(!--refs){alive=false;dispose();}}
+ };
+-struct OSString:Object {std::string value;explicit OSString(const char *s):value(s){}bool isEqualTo(const char *s){return value==s;}};
++struct OSString:Object {std::string value;explicit OSString(const char *s):value(s){}bool isEqualTo(const char *s){return value==s;}const char *getCStringNoCopy(){return value.c_str();}};
+ struct OSNumber:Object {unsigned value;explicit OSNumber(unsigned v):value(v){}unsigned unsigned32BitValue(){return value;}};
+ struct OSData:Object {std::vector<uint8_t> data;OSData(const void *p,size_t n):data((const uint8_t*)p,(const uint8_t*)p+n){}static OSData *withBytes(const void *p,size_t n){return new OSData(p,n);}};
+ struct OSDictionary:Object {
+@@ -64,7 +64,7 @@ bool native(IOService *panel,IOService *){
+  }
+  return true;
+ }
+-struct XeHost {static XeHost *callbackHost;IOPCIDevice *backlightGPU=nullptr;bool (*orgPanelSetDisplay)(IOService*,IOService*)=native;static bool wrapPanelSetDisplay(IOService*,IOService*);};XeHost *XeHost::callbackHost;
++struct XeHost {static XeHost *callbackHost;IOPCIDevice *backlightGPU=nullptr;bool backlightPanelEDP=false;bool (*orgPanelSetDisplay)(IOService*,IOService*)=native;static bool wrapPanelSetDisplay(IOService*,IOService*);};XeHost *XeHost::callbackHost;
+ '''+body+r'''
+ int main(){
+  for(unsigned test=0;test<12;++test) {
+diff --git a/tests/host_publication.py b/tests/host_publication.py
+index f3fb413..5c95b67 100644
+--- a/tests/host_publication.py
++++ b/tests/host_publication.py
+@@ -46,8 +46,9 @@ struct KernelPatcher {
+ namespace XeDataAccess {bool processKext(KernelPatcher&,size_t,mach_vm_address_t,size_t){return false;}void processKernel(KernelPatcher &){assert(published);events.push_back(7);}}
+ struct Graphics {size_t loadIndex=4;bool off=false;void switchOff(){off=true;}} graphics;
+ struct {size_t loadIndex=5;}backlight;
++static bool checkKernelArgument(const char *){return false;}
+ struct XeHost {
+- bool active=false,backlightEnabled=false;enum {FB_DETECT,FB_RESET,FB_COPY,FB_ZEROFILL,FB_NONE,FB_TOTAL};uint32_t resetFramebuffer=FB_NONE;
++ bool active=false,backlightEnabled=false,backlightPanelEDP=false;enum {FB_DETECT,FB_RESET,FB_COPY,FB_ZEROFILL,FB_NONE,FB_TOTAL};uint32_t resetFramebuffer=FB_NONE;
+  IOPCIDevice *backlightGPU=nullptr;
+  struct vc_info{};vc_info consoleVinfo;bool gotConsoleVinfo=false;
+  struct XE {
