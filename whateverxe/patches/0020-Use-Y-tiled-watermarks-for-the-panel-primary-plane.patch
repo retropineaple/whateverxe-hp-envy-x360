@@ -1,7 +1,7 @@
 From 131429248b8a470daf5a872b6abff896ba780922 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 15:19:25 +0530
-Subject: [PATCH 20/47] Use Y-tiled watermarks for the panel primary plane
+Subject: [PATCH 20/54] Use Y-tiled watermarks for the panel primary plane
 
 The modeset samples the pending plane control while it still describes
 the adopted linear GOP, then scans out Y-tiled; at 2880 pixels the

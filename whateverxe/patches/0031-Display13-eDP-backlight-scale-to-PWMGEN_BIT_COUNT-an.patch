@@ -1,7 +1,7 @@
 From 4581cedf4abd40ff4d8994087249edcc3e502064 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 19:42:28 +0530
-Subject: [PATCH 31/47] Display13 eDP backlight: scale to PWMGEN_BIT_COUNT and
+Subject: [PATCH 31/54] Display13 eDP backlight: scale to PWMGEN_BIT_COUNT and
  publish the DPCD backlight block
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

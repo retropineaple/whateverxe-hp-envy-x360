@@ -3,7 +3,7 @@
 The `WhateverXe.kext` in this EFI is built from the `adlp-edp` branch of
 [retropineaple/WhateverXe](https://github.com/retropineaple/WhateverXe/tree/adlp-edp),
 a fork of [b00t0x/WhateverXe](https://github.com/b00t0x/WhateverXe). The branch
-starts from the upstream **0.6.0** release and adds 47 commits. To see them all:
+starts from the upstream **0.6.0** release and adds 54 commits. To see them all:
 
 ```bash
 git log --reverse 0.6.0..adlp-edp
@@ -18,9 +18,10 @@ unchanged on other machines:
 | `-wex-adlp-edp` | Internal eDP panel mode (sections 1–8) |
 | `-wex-reset-restore` | GPU hang recovery fixes (section 10) |
 | `-wex-no-multicontext` | Compute on the render engine instead of Apple's second ring (section 10) |
+| `-wex-scanout-coherent` | Keeps scaled HiDPI frames out of the CPU cache before scanout (section 6) |
+| `-wex-pm` | CPU performance and idle profile for hybrid Alder Lake (section 12) |
 | `-wex-reset-trace` | Recovery trace only (diagnostics) |
 | `-wex-adlp-readout`, `-wex-adlp-readout-noaux` | Firmware state readout (diagnostics) |
-| `-wex-noppguard` | Turns off the inactive VA user patch (section 9) |
 
 The code says "ADL-P" because Intel and Linux use that name for the silicon
 family that covers both Alder Lake-P and Alder Lake-U (the i7-1250U is
@@ -108,8 +109,23 @@ fixes each point where Apple's Tiger Lake driver then broke.
 - **Plan cursor watermarks for the pending cursor size** on HiDPI changes.
 - **Accept downscaled source widths and heights above `htotal`/`vtotal`**,
   and **use the pipe's base pixel clock for line time under downscaling.**
-  These are needed for scaled HiDPI modes. Looks-like 1600×1000 and larger
-  still show motion corruption; 1440×900 is clean.
+  These are needed for scaled HiDPI modes.
+- **Give a pipe-scaled RGB primary the full single-pipe DDB.** In a scaled
+  HiDPI mode (looks-like 1600×1000, a 3200×2000 primary) the donor's planar
+  DBUF setup ran last and left the primary only blocks 40..681 of 2048, so
+  it underran on motion. The RGB request is rewritten to the single-pipe
+  layout (40..2047).
+- **Keep flipped surfaces out of the LLC (`-wex-scanout-coherent`).** The
+  display engine doesn't snoop the CPU's last-level cache. The donor gives
+  displayable IOSurfaces a cache setting (MOCS) that keeps their writes out
+  of it, but WindowServer's backing for a downscaled HiDPI mode (larger than
+  the 2880×1800 panel) isn't marked displayable and is still flipped to the
+  plane. So the panel showed partly drawn frames: transparent windows and
+  flicker along the diagonal of each full-screen draw. Every surface that
+  `IGAccelDisplayPipe::performTransaction` sends to plane 0 or 1 is recorded,
+  and `isDisplayableIOSurface` also reports those as displayable. Counters are
+  in `WEXScanoutCoherent`. With both fixes, 1600×1000 and the other scaled
+  modes are clean.
 
 ## 7. Framebuffer memory
 
@@ -141,8 +157,8 @@ request then dereferences the missing VEBOX renderer.
 - **Refuse the VA driver's post-processing context (Lilu user patch).**
   Correct in an in-process test, but **inactive in practice**: Lilu reads the
   file at early boot, before `/Library` is mounted, so the patch never applies.
-  `-wex-noppguard` turns it off. The working approach is the optional on-disk
-  patch in [`macOS/va-vpp-fix`](../macOS/va-vpp-fix).
+  It was later removed, along with `-wex-noppguard`. The working approach is
+  the optional on-disk patch in [`macOS/va-vpp-fix`](../macOS/va-vpp-fix).
 
 ## 10. GPU hang recovery
 
@@ -183,6 +199,12 @@ came from tracing the recovery on the laptop.
   control table (0xB020..). Without it the GPU ran 20–40× slower after a
   recovery. The global MOCS (0x4000..) and L3 tables are saved with the other
   registers, and entries that changed are rewritten.
+- **Complete stamps a waiter times out on.** A command queue torn down after
+  a recovery waited forever in `finishEvent` for a stamp the reset had lost.
+  The engine was idle, so nothing restarted it, and the teardown held a lock
+  WindowServer needed on display wake, ending in a watchdog panic. After a
+  recovery, a stamp still behind its last issued value that hasn't moved
+  across three timeouts is completed.
 
 ## 11. Diagnostics (no effect on normal use)
 
@@ -193,11 +215,35 @@ came from tracing the recovery on the laptop.
 
   `-wex-adlp-readout-noaux` skips the DPCD reads.
 - An ordered trace of display bring-up (connection changes, probes, EDID,
-  training, AUX failures), a rolling recent-events ring for sleep/wake, and
-  steady-state scaler/DBUF/underrun samples. `tools/decode_panel_trace.py`
-  decodes them.
+  training, AUX failures) and a rolling recent-events ring for sleep/wake.
+  `tools/decode_panel_trace.py` decodes them. A steady-state scaler/DBUF/
+  underrun sampler was added for the HiDPI investigation and later removed.
 - The firmware DSDT/SSDTs are published as `WEXACPI-*` registry properties
   in panel mode. That's how this repo's ACPI patches were checked.
+
+## 12. CPU performance and idle profile (`-wex-pm`)
+
+XE-PM is [JulioNectar's](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe)
+code from his NootedGreen fork, adapted for WhateverXe (boot-arg, EPP 0 and a
+status property). Applied 20 s after boot, and only where the expected code and values match
+byte for byte:
+
+- **HWP units on hybrid P-cores.** macOS's CPU power management (XCPM) writes
+  its HWP request in 100 MHz units, but a P-core on hybrid Alder Lake counts
+  about 78.7 MHz per unit, so turbo was capped (about 3.7 GHz here). The
+  request is rescaled to the core's real highest performance; one-thread
+  turbo now reaches 4.15 GHz.
+- **EPP 0** and **energy-efficient turbo off**, which otherwise clip
+  one-core turbo on these mobile parts.
+- **Idle states.** XCPM's table for the spoofed CPU has C8/C10 disabled and
+  C3 (not a state on this CPU) enabled. C8/C10 are enabled and C3 disabled,
+  so cores reach their deep idle state and the package reaches PC3.
+- **D3hot** for PCI functions macOS has no driver for: IPU camera, GNA, ISH,
+  DPTF and the Thunderbolt DMA controller (USB-C itself is unaffected).
+
+Status is in `WEXPowerProfile` and `sysctl debug.xepm`. The package still
+doesn't reach PC8/PC10 as on Linux: that needs the display firmware (DMC),
+DC5/DC6 and PSR, which aren't done yet.
 
 ## Building
 

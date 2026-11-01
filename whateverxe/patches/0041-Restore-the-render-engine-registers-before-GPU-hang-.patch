@@ -1,7 +1,7 @@
 From 70f09367ff81b74ef5350cf70276725e4e58f40c Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 16:35:51 +0530
-Subject: [PATCH 41/47] Restore the render engine registers before GPU hang
+Subject: [PATCH 41/54] Restore the render engine registers before GPU hang
  replay (-wex-reset-restore)
 
 On this GPU the hung work sits on the donor's second ring (0x1A000 block),

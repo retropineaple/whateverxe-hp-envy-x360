@@ -3,7 +3,8 @@
 macOS Tahoe on the **HP Envy x360 13-bf0059TU** with Metal acceleration on the
 **internal 2880×1800 OLED**, using a modified
 [WhateverXe](https://github.com/b00t0x/WhateverXe) that drives the internal
-eDP panel and recovers from GPU hangs on this chip.
+eDP panel and recovers from GPU hangs on this chip, plus a touchscreen driver
+written for it.
 
 > [!WARNING]
 > **This is a work in progress.** It's experimental, and there may be
@@ -20,6 +21,7 @@ eDP panel and recovers from GPU hangs on this chip.
 - **[WhateverXe changes](docs/WHATEVERXE-CHANGES.md)**: every change to the kext, explained
 - **[EFI contents](docs/EFI.md)**: every kext, SSDT, patch and setting, explained
 - **[Rebuild the kext yourself](whateverxe/README.md)**: upstream 0.6.0 source + the patches in `whateverxe/patches` give a byte-identical `WhateverXe.kext`
+- **[Touchscreen driver](ithc/README.md)**: source and build script for `ITHC.kext`
 - WhateverXe source: [retropineaple/WhateverXe, branch `adlp-edp`](https://github.com/retropineaple/WhateverXe/tree/adlp-edp)
 
 ## Specs
@@ -39,7 +41,12 @@ eDP panel and recovers from GPU hangs on this chip.
 ## What works
 
 - **Metal acceleration** on the internal OLED at native 2880×1800 @ 60 Hz,
-  shown as **Built-in Display** with HiDPI (1440×900)
+  shown as **Built-in Display** with HiDPI (1440×900, and 1600×1000 and the
+  other scaled modes without flicker)
+- **Touchscreen**: taps, scrolling, multi-finger gestures (ITHC.kext with
+  VoodooI2CHID)
+- **CPU performance**: full P-core turbo (4.15 GHz on one thread) and deep core
+  idle states with the XE-PM profile (`-wex-pm`)
 - **GPU hang recovery**: a GPU hang causes a few-second stutter, then the
   laptop carries on at full speed (it used to freeze the whole machine)
 - **Hardware video decode** (H.264/HEVC) through VideoToolbox
@@ -57,23 +64,28 @@ eDP panel and recovers from GPU hangs on this chip.
 ## What doesn't work / known issues
 
 - **Video playback sometimes hangs the GPU** (seen with the App Store's
-  autoplaying videos): the hang now recovers, but each one causes a stutter
-  of about 3 seconds. The video driver's GPU program that hangs isn't fixed yet.
+  autoplaying videos): the hang recovers, but each one causes a stutter of a
+  few seconds. The video driver's GPU program that hangs isn't fixed yet.
+  Turning off App Store autoplay avoids it.
 - **Sleep**: the laptop enters sleep but never wakes ("Sleep Wake failure in
   EFI"), even without graphics drivers. It's a firmware limit; sleep is turned
   off instead.
 - **Speakers**: the CS35L41 smart amplifiers have no macOS driver.
 - **Siri can't hear you**, over either a Bluetooth headset or the headphone
   jack. Bluetooth audio and its mic otherwise work (voice memos record fine).
-- **Camera**: doesn't work yet.
-- **Touchscreen**: doesn't work yet.
+- **Camera**: it's an IPU6 MIPI camera, which has no macOS driver, so it
+  can't work.
+- **Touchscreen scrolling** shares macOS's "Natural scrolling" setting with the
+  mouse. A tool such as LinearMouse can set them separately.
 - **Touchpad**: untested. This laptop's touchpad is broken in hardware (it
   doesn't work in Windows or Ubuntu either). VoodooI2C is included for it.
-- **Battery life and heat**: the battery drains much faster than on Windows
-  or Ubuntu, and the laptop gets very hot. Not investigated yet.
+- **Battery life and heat**: better with `-wex-pm` (about 4–6.5 W at idle), but
+  still worse than Ubuntu (2–3 W). The rest needs the display's power-saving
+  firmware and states (DMC, DC5/DC6, PSR), which aren't done yet.
+- **Occasional animation stutter**: macOS on Intel doesn't tell P-cores from
+  E-cores, so UI work sometimes lands on a slower E-core.
 - **Safari video** decodes in software: Safari refuses the patched VA driver,
   and the unpatched one crashes on video processing.
-- **HiDPI larger than 1440×900** (1600×1000 and up) shows motion corruption.
 - **AirDrop / Continuity**: not possible with the Intel AX211.
 - **Apple TV app / FairPlay video**: not supported by WhateverXe.
 
@@ -89,6 +101,11 @@ Details, causes and what was tried are in [docs/FIXES.md](docs/FIXES.md).
   IntelBluetoothFirmware
 - [laobamac](https://github.com/laobamac/SimpleHDA) for SimpleHDA
 - VoodooI2C, VoodooPS2, USBToolBox, CpuTopologyRebuild and HoRNDIS authors
+- [quo/ithc-linux](https://github.com/quo/ithc-linux): the Linux THC driver
+  that ITHC.kext is ported from
+- [JulioNectar](https://github.com/JulioNectar/Hackintosh-XPS13Plus-IrisXe-Tahoe):
+  the XE-PM CPU profile (`-wex-pm`) is his code from the NootedGreen fork,
+  shared with the Hackintosh community
 - The [Linux i915 driver](https://github.com/torvalds/linux/tree/v6.12/drivers/gpu/drm/i915),
   used as the reference for this GPU's behaviour
 - Claude (AI) helped with the debugging, patches, scripts and docs.
@@ -96,6 +113,7 @@ Details, causes and what was tried are in [docs/FIXES.md](docs/FIXES.md).
 ## Licenses
 
 Each kext in `EFI/OC/Kexts` keeps its own license. WhateverXe is BSD-3-Clause
-(see the fork). The scripts and docs in this repo are provided as-is.
+(see the fork). ITHC.kext is BSD-2-Clause, as allowed by ithc-linux's
+"GPL-2.0 OR BSD-2-Clause" license (see [ithc/LICENSE](ithc/LICENSE)). The scripts and docs in this repo are provided as-is.
 Apple's graphics drivers aren't included: get them from the WhateverXe
 Graphics release.

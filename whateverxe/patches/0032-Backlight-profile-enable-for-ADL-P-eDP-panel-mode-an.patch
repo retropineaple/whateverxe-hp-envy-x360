@@ -1,7 +1,7 @@
 From 059b5d24da174c936c23a54027bca078ad3d4062 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 20:12:11 +0530
-Subject: [PATCH 32/47] Backlight profile: enable for ADL-P eDP panel mode and
+Subject: [PATCH 32/54] Backlight profile: enable for ADL-P eDP panel mode and
  key it by the PNLF UID
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

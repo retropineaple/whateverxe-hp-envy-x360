@@ -1,7 +1,7 @@
 From 23e52757da8836640125eeb3f7576f43c2fecc2f Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 18:54:29 +0530
-Subject: [PATCH 28/47] Display13 eDP WM: fix line-time helper build (pass
+Subject: [PATCH 28/54] Display13 eDP WM: fix line-time helper build (pass
  panel flag)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

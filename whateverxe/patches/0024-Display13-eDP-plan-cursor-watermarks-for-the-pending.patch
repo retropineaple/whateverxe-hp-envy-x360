@@ -1,7 +1,7 @@
 From 30cf3e02e768bdde33ac2fa8911d3a4605f621c2 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 18:24:57 +0530
-Subject: [PATCH 24/47] Display13 eDP: plan cursor watermarks for the pending
+Subject: [PATCH 24/54] Display13 eDP: plan cursor watermarks for the pending
  cursor size on HiDPI resize
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

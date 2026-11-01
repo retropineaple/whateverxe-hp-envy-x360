@@ -1,7 +1,7 @@
 From 22afffa99b68affc84e0e22f3f0ffe00ba0dd207 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 13:31:10 +0530
-Subject: [PATCH 12/47] Resolve the adopted boot mode to the matching EDID mode
+Subject: [PATCH 12/54] Resolve the adopted boot mode to the matching EDID mode
 
 enableController leaves an adopted online FB in kIOFBBootProgrammable and
 getCurrentDisplayMode only replaces it on an exact hardware/EDID timing

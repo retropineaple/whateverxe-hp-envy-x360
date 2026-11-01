@@ -1,7 +1,7 @@
 From 4b30ac51bc73b946b1ba2ddf631245b6f01c6031 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 15:10:14 +0530
-Subject: [PATCH 19/47] Describe the native panel mode before CoreDisplay
+Subject: [PATCH 19/54] Describe the native panel mode before CoreDisplay
  installs timings
 
 Before setDetailedTimings, validateDisplayMode cannot describe any mode,

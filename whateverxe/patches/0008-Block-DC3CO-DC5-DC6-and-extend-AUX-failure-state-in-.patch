@@ -1,7 +1,7 @@
 From 0d49e0102bf5d366cff217cfe89e56ddcb4f1261 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 11:29:40 +0530
-Subject: [PATCH 08/47] Block DC3CO/DC5/DC6 and extend AUX failure state in
+Subject: [PATCH 08/54] Block DC3CO/DC5/DC6 and extend AUX failure state in
  -wex-adlp-edp
 
 No DMC program is loaded, so display C-states would power-gate the

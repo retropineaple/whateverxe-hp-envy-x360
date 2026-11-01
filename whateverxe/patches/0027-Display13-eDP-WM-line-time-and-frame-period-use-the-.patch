@@ -1,7 +1,7 @@
 From 516a760a4c85608ab075731863e7e7abfaee9208 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 18:51:27 +0530
-Subject: [PATCH 27/47] Display13 eDP WM: line time and frame period use the
+Subject: [PATCH 27/54] Display13 eDP WM: line time and frame period use the
  pipe base pixel clock under downscale
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

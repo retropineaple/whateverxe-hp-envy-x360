@@ -1,7 +1,7 @@
 From 4ee1544832af695de3bd8b23f8118854b6616339 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 20:29:15 +0530
-Subject: [PATCH 33/47] Panel diagnostics: publish firmware DSDT/SSDTs in
+Subject: [PATCH 33/54] Panel diagnostics: publish firmware DSDT/SSDTs in
  -wex-adlp-edp mode
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

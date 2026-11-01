@@ -20,6 +20,8 @@ each is explained in [WHATEVERXE-CHANGES.md](WHATEVERXE-CHANGES.md).
 | Screen black right after boot | Brightness sent as a 16-bit value; this panel is 11-bit | Scale to the panel's `PWMGEN_BIT_COUNT` |
 | Brightness 0 left the panel dark for good | Clearing the backlight-enable bit; this panel never comes back from that | Use DPCD brightness level 0 instead |
 | F2/F3 keys did nothing | HP's firmware notifies `GFX0.DD1F`; BrightnessKeys listens on `DD02` | OpenCore ACPI patch DD1F → DD02 |
+| Motion underruns in scaled HiDPI (1600×1000) | The donor's planar DBUF setup left the primary plane a third of the display buffer | Give a pipe-scaled RGB primary the full single-pipe DDB |
+| Flicker and see-through windows in HiDPI above 1440×900 | The backing for these modes is bigger than the panel and wasn't marked displayable, so its writes sat in the CPU cache, which the display engine doesn't read | `-wex-scanout-coherent`: treat every surface flipped to the screen as displayable |
 
 ### GPU hangs
 
@@ -30,6 +32,7 @@ each is explained in [WHATEVERXE-CHANGES.md](WHATEVERXE-CHANGES.md).
 | GPU drivers couldn't program their registers after a reset | The reset also cleared the user-mode register whitelist | Whitelist added to the restore |
 | Stutter every 5 seconds after a recovery | Work lost in the reset never finished, so macOS's GPU watchdog kept flagging it | Two seconds after recovery, mark lost work finished |
 | GPU 20–40× slower after a recovery | The reset cleared the L3 cache-control table | Cache-control tables added to the restore |
+| Watchdog panic on display wake after a recovery | An app's command queue waited forever for work the reset had lost, while holding a lock WindowServer needed | Complete lost work that a waiter has timed out on three times |
 
 ### Audio, Bluetooth and system
 
@@ -45,21 +48,25 @@ each is explained in [WHATEVERXE-CHANGES.md](WHATEVERXE-CHANGES.md).
 | CPU shown as "Xeon W" | The `revpatch` boot-arg overrode the NVRAM value | RestrictEvents NVRAM `revpatch=sbvmm,cpuname` and `revcpuname`, no boot-arg |
 | Video processing crashed apps | Apple's Tiger Lake VA driver has no VEBOX renderer on this GPU | Optional on-disk VA patch (`macOS/va-vpp-fix`), with limits |
 | Sleep never woke | Firmware limit (Modern Standby machine) | Workaround: sleep disabled, lid close turns the screen off |
+| Touchscreen dead | It's an ELAN panel behind Intel's Touch Host Controller (THC, SPI), which has no macOS driver | `ITHC.kext`, a port of the Linux ithc driver, feeds it to VoodooI2CHID |
+| Keyboard Setup Assistant opened at every boot | The touchscreen's HID descriptor includes a keyboard collection | ITHC publishes that collection as undefined |
+| CPU turbo capped at about 3.7 GHz, package stuck at PC2 | macOS writes P-core HWP requests in the wrong units on hybrid Alder Lake, and its idle table has C8/C10 off | `-wex-pm` (XE-PM CPU profile) |
 
 ## Still open
 
 | Problem | What's known |
 |---|---|
-| Video sometimes hangs the GPU (App Store autoplay videos) | The video driver's GPU program (`MEDIA_OBJECT`) never finishes. Recovery now handles it, at the cost of a ~3 s stutter per hang |
-| Idle black screen | Caused by a GPU hang during Photos analysis; the recovery fixes should cover it, but it hasn't been re-tested after an hour idle |
+| Video sometimes hangs the GPU (App Store autoplay videos) | The video driver's GPU program (`MEDIA_OBJECT`) never finishes. Recovery handles it, at the cost of a stutter of a few seconds per hang. Turning off App Store autoplay avoids it |
 | Sleep | Firmware limit, see above |
 | Speakers | CS35L41 amplifiers have no macOS driver |
 | Siri can't hear you | Bluetooth voice packets are discarded as malformed for Siri; the jack mic records but Siri gets nothing usable |
-| Camera, touchscreen | Not working yet, not investigated |
+| Camera | An IPU6 MIPI camera: macOS has no driver for this kind of camera, so it can't work |
+| Touchscreen scroll direction | The touchscreen follows macOS's shared "Natural scrolling" setting with the mouse; a tool like LinearMouse can set them separately |
 | Touchpad | Untested: the author's touchpad is broken in hardware |
-| Battery drain and heat | Not investigated |
+| Battery drain and heat | Better with `-wex-pm` (package reaches PC3, about 4–6.5 W idle), but Linux reaches PC8/PC10 at 2–3 W. That needs the display firmware (DMC), DC5/DC6 and PSR, which aren't done: a first attempt reached DC5 but froze the laptop, so it isn't included |
+| Occasional animation stutter | macOS on Intel doesn't know P-cores from E-cores, so UI work sometimes runs on a slower E-core |
 | Safari video in software | Safari's GPU process refuses the ad-hoc signed VA driver |
-| HiDPI above 1440×900 | Motion corruption at 1600×1000 and up |
 | AirDrop / Continuity | Not possible with the Intel AX211 |
 | Apple TV app / FairPlay | Not supported by WhateverXe |
 | Turning off the multi-context compute ring | Fixes the deadlock; long-term side effects not fully known |
+| Activity Monitor shows 0% GPU | The GPU works; its busy counter is kept by firmware that isn't loaded, so nothing fills it in |

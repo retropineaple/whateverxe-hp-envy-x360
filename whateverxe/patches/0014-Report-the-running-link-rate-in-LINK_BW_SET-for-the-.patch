@@ -1,7 +1,7 @@
 From dc747524905ff60125f26096436b1e6fe970714f Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 13:52:47 +0530
-Subject: [PATCH 14/47] Report the running link rate in LINK_BW_SET for the eDP
+Subject: [PATCH 14/54] Report the running link rate in LINK_BW_SET for the eDP
  panel
 
 The OLED is an eDP 1.4 sink trained through LINK_RATE_SET and returns

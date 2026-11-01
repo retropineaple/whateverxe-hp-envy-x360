@@ -1,7 +1,7 @@
 From 4b1181b958cd589e6b167e4bb1f4047f1543e1e6 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 21:17:37 +0530
-Subject: [PATCH 36/47] Display13 eDP backlight: panel off via DPCD level 0,
+Subject: [PATCH 36/54] Display13 eDP backlight: panel off via DPCD level 0,
  not BACKLIGHT_ENABLE; log brightness writes
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

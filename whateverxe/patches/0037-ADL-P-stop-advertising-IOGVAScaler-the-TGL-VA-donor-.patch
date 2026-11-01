@@ -1,7 +1,7 @@
 From 0c6c6c0b7039f54e8eb58880264e69f9938799f1 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 06:49:27 +0530
-Subject: [PATCH 37/47] ADL-P: stop advertising IOGVAScaler; the TGL VA donor
+Subject: [PATCH 37/54] ADL-P: stop advertising IOGVAScaler; the TGL VA donor
  has no VEBOX render component here
 
 AppleGVA pixel transfers fault in VPHAL renderer init (pRender[VEBOX] null)

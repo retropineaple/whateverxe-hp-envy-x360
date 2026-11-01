@@ -3,7 +3,7 @@
 #
 # Rebuilds this repo's WhateverXe.kext from b00t0x's original source:
 #   1. clones b00t0x/WhateverXe and checks out the 0.6.0 release
-#   2. applies the 47 patches in whateverxe/patches (the adlp-edp branch)
+#   2. applies the 54 patches in whateverxe/patches (the adlp-edp branch)
 #   3. fetches the same pinned build dependencies upstream's CI uses
 #   4. runs the CPU tests and the RELEASE build
 #   5. compares the result with the kext in EFI/OC/Kexts
@@ -16,7 +16,7 @@ set -e
 here=${0:A:h}
 repo=${here:h}
 work=${1:-$PWD/whateverxe-build}
-expected=c090b9dd35398c72e9567b38b9bb9b61415ab7fcfe22ffc78cbafc93ee67e49b
+expected=197da23bbe5a09731ef9517a0a6f9dabe52ab1f9b0c885a841a064190770288c
 
 [[ -e $work ]] && { echo "$work already exists; pass another folder"; exit 1; }
 git clone -q https://github.com/b00t0x/WhateverXe $work
@@ -32,8 +32,8 @@ ln -s $work/build/dependencies/Lilu/Lilu/Headers Lilu.kext/Contents/Resources/He
 ln -s $work/build/dependencies/Lilu/Lilu/Library Lilu.kext/Contents/Resources/Library
 
 python3 tools/test.py
-# __DATE__ = Oct 29 2026, as in the original build
-SOURCE_DATE_EPOCH=1793275200 python3 tools/build.py --release
+# __DATE__ = Oct 31 2026, as in the original build
+SOURCE_DATE_EPOCH=1793448000 python3 tools/build.py --release
 
 built=$work/build/WhateverXe.kext
 # The linker's LC_UUID depends on the build folder's path, so it never
@@ -47,7 +47,7 @@ off = 32
 for _ in range(struct.unpack_from('<I', d, 16)[0]):
     cmd, size = struct.unpack_from('<II', d, off)
     if cmd == 0x1B:
-        d[off + 8:off + 24] = uuid.UUID('CA75FE57-02F0-3967-919D-671A0C62C7F5').bytes
+        d[off + 8:off + 24] = uuid.UUID('93BA5765-EE4C-3B00-851A-09E56A97AE7B').bytes
         break
     off += size
 else:

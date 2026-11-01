@@ -103,18 +103,22 @@ Reboot afterwards. Limits:
 ## Boot-args in this EFI
 
 ```
--allow3d -disablegfxfirmware -igfxdvmt -wex-adlp-edp keepsyms=1 msgbuf=4194304 shda-lang=en alcid=11 -wex-reset-restore -wex-no-multicontext
+-allow3d -disablegfxfirmware -igfxdvmt -wex-adlp-edp keepsyms=1 shda-lang=en alcid=11 -wex-reset-restore -wex-no-multicontext -wex-scanout-coherent -wex-pm
 ```
 
 `-wex-reset-restore` and `-wex-no-multicontext` are what make GPU hangs
-recover instead of freezing the laptop. See [EFI.md](EFI.md#graphics).
+recover instead of freezing the laptop. `-wex-scanout-coherent` keeps HiDPI
+modes above 1440×900 clean, and `-wex-pm` is the CPU profile. See
+[EFI.md](EFI.md#graphics).
 
 ## Checklist
 
 - [ ] Display accelerated at 2880×1800, "Built-in Display", HiDPI at 1440×900
+      and 1600×1000 without flicker
 - [ ] Brightness slider and F2/F3 keys (down to fully off and back)
 - [ ] Lid close turns the screen off and reopening brings it back
 - [ ] Wi-Fi, Bluetooth, keyboard, USB ports, battery
+- [ ] Touchscreen: tap, scroll and multi-finger gestures
 - [ ] Touchpad (untested on the author's laptop: its touchpad hardware is broken)
 - [ ] Headphone jack output
 - [ ] A GPU hang (for example App Store videos) stutters for a few seconds and recovers

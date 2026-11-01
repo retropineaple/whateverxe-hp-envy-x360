@@ -1,7 +1,7 @@
 From f907db0739c017c7ff09dcfc637d7821842a0652 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 10:04:01 +0530
-Subject: [PATCH 04/47] Admit the Combo A panel DP route without LFP panel
+Subject: [PATCH 04/54] Admit the Combo A panel DP route without LFP panel
  facts
 
 The HP Envy x360 13-bf VBT selects its panel by PnP ID (panel_type 0xFF),

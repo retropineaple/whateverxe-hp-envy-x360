@@ -1,7 +1,7 @@
 From 278a623fc55fbca5e62a46c8dde7991a4de03daf Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 18:44:02 +0530
-Subject: [PATCH 26/47] Display13 WM latch: accept downscaled source heights
+Subject: [PATCH 26/54] Display13 WM latch: accept downscaled source heights
  above vtotal
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

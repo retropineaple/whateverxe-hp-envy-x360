@@ -1,7 +1,7 @@
 From 891a6aac4d081a6db2528695d56724681689847e Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 13:11:18 +0530
-Subject: [PATCH 11/47] Ignore AGDC framebuffer-online requests in
+Subject: [PATCH 11/54] Ignore AGDC framebuffer-online requests in
  -wex-adlp-edp
 
 AGDC's per-FB online request reaches SetFbStatusOnNextProbe through

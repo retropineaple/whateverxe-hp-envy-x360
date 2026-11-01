@@ -1,7 +1,7 @@
 From 42950b712a312d04f49f5040901a1a3b184b65ae Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 18:36:00 +0530
-Subject: [PATCH 25/47] Display13 WM: accept pipe-scaler downscaled source
+Subject: [PATCH 25/54] Display13 WM: accept pipe-scaler downscaled source
  widths above htotal
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

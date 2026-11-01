@@ -13,9 +13,11 @@ OpenCore 1.0.8, SMBIOS MacBookPro16,2, macOS Tahoe 26.7.1.
 | boot-arg `-wex-adlp-edp` | | Internal-panel mode. Without it the OLED gets no driver. |
 | boot-arg `-wex-reset-restore` | | GPU hang recovery for this chip: restores the render engine's settings, whitelist and cache tables after a reset, and finishes lost work. |
 | boot-arg `-wex-no-multicontext` | | Turns off Apple's second compute ring, which deadlocked during recovery; compute runs on the render engine. |
+| boot-arg `-wex-scanout-coherent` | | Keeps scaled HiDPI modes (1600×1000 and up) from flickering. |
+| boot-arg `-wex-pm` | | CPU profile: uncaps P-core turbo, enables deep core idle states, powers down driverless functions. |
 | boot-args `-allow3d -disablegfxfirmware` | | Required by WhateverXe (see its README). |
 | boot-arg `-igfxdvmt` | | DVMT (stolen memory) handling for the iGPU. |
-| boot-args `keepsyms=1 msgbuf=4194304` | | Readable panic logs and a larger kernel log buffer. |
+| boot-arg `keepsyms=1` | | Readable panic logs. |
 | `csr-active-config` | `03080000` (0x803) | SIP relaxed for the GPU bundles and AMFIPass. |
 | IGPU `AAPL,backlight-control` | `01000000` | Makes macOS show the brightness slider. |
 | IGPU `built-in`, `AAPL,slot-name`, `model`, `hda-gfx` | | Device naming and HDMI-audio hints for macOS. |
@@ -100,7 +102,10 @@ Other kexts:
 - VirtualSMC (+ SMCBatteryManager, SMCProcessor)
 - CpuTopologyRebuild (hybrid P/E-core topology)
 - NVMeFix
-- VoodooI2C/VoodooI2CHID (I2C touchpad; untested, see the README)
+- VoodooI2C/VoodooI2CHID (touchscreen gestures and pen through ITHC; the
+  I2C touchpad is untested, see the README)
+- ITHC (touchscreen: Intel Touch Host Controller driver, after VoodooI2CHID
+  in `Kernel → Add`; source and build in [`ithc/`](../ithc))
 - VoodooPS2Controller (keyboard)
 - AirportItlwm (Wi-Fi)
 - HoRNDIS (Android USB tethering)

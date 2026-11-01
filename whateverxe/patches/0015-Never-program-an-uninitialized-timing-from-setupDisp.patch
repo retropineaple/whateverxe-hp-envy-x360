@@ -1,7 +1,7 @@
 From 880835ed1156a837861a7534e82b7bfd0bddb9c5 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 14:14:10 +0530
-Subject: [PATCH 15/47] Never program an uninitialized timing from
+Subject: [PATCH 15/54] Never program an uninitialized timing from
  setupDisplayTiming
 
 setupDisplayTiming returns without writing its output when the AGDC link

@@ -1,7 +1,7 @@
 From 42c2ac8101af20db0167668656a58fc6879572e1 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 06:56:46 +0530
-Subject: [PATCH 38/47] Revert IOGVAScaler removal: AppleGVA still routes pixel
+Subject: [PATCH 38/54] Revert IOGVAScaler removal: AppleGVA still routes pixel
  transfers to the VA donor
 
 The repro crashed identically without the property, so it is not the selector.

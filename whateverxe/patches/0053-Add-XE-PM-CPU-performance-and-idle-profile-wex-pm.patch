@@ -1,0 +1,258 @@
+From c8b60c27d7d389478fff658dc2f80a80f4606f2b Mon Sep 17 00:00:00 2001
+From: retropineaple <118107729+retropineaple@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 19:37:13 +0530
+Subject: [PATCH 53/54] Add XE-PM CPU performance and idle profile (-wex-pm)
+
+From JulioNectar's NootedGreen XE-PM (commit 0492b29): rescale XCPM's HWP
+request on hybrid P-cores, EPP 0, energy-efficient turbo off, C8/C10 on
+and C3 off in XCPM's idle table, D3hot for driverless functions, applied
+20 s after boot with byte-checked routing. Adapted: -wex-pm, EPP 0 with
+runtime sysctl, status in WEXPowerProfile.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md                               |   1 +
+ README_ja.md                            |   1 +
+ WhateverXe/kern_host.cpp                |   3 +
+ WhateverXe/kern_xepm.cpp                | 167 ++++++++++++++++++++++++
+ tests/fixtures/boot_argument_names.json |   1 +
+ tests/host_publication.py               |   1 +
+ 6 files changed, 174 insertions(+)
+ create mode 100644 WhateverXe/kern_xepm.cpp
+
+diff --git a/README.md b/README.md
+index 5b8e797..9a41238 100644
+--- a/README.md
++++ b/README.md
+@@ -199,6 +199,7 @@ Temporary development diagnostic: `-wex-adlp-readout` captures ADL-P boot resour
+ Temporary development diagnostic: `-wex-reset-trace` records each GPU hang recovery step (channel restart, engine reset, scheduler reset and resume, command-streamer reset) with the render engine's reset and ring registers in the `WEXGPUResetTrace` registry property. It does not change recovery.
+ Experimental: `-wex-reset-restore` saves the render engine's mode, status-page, chicken and user-mode whitelist registers and its cache-control (MOCS and L3) tables just before a render-domain GPU hang reset and writes them back after the reset, before work is replayed, on GPUs where the reset clears them, and completes stamps whose work the reset lost: two seconds after the reset, and later whenever a waiter times out on one that has stopped moving. It also enables the reset trace.
+ Experimental: `-wex-no-multicontext` disables the donor's second (multi-context compute) command streamer, so compute work runs on the render engine.
++Experimental: `-wex-pm` applies the XE-PM CPU profile for hybrid Alder Lake / Raptor Lake under XCPM 20 s after boot: it rescales XCPM's HWP request to the P-cores' real highest performance (XCPM's 100 MHz units cap them about 20% low), sets EPP 0, turns off energy-efficient turbo, enables C8/C10 and disables the non-existent C3 in XCPM's idle table, and puts driverless IPU/GNA/ISH/DPTF/Thunderbolt DMA functions in D3hot. Status is in `WEXPowerProfile` and `sysctl debug.xepm`.
+ Experimental: `-wex-scanout-coherent` treats every surface the donor flips to a display plane as displayable, so its later rendering uses the donor's display-safe (not LLC-cached) MOCS. The display engine does not snoop the LLC; without this, a downscaled HiDPI backing larger than the panel shows unflushed, partly drawn frames.
+ `-wex-adlp-load-only` blocks both native framebuffer and accelerator probes/starts on a selected ADL-P/RPL-P device, for load-only diagnostics without GPU initialization.
+ `-wex-display13-offline` keeps native display controller initialization enabled on Alder Lake-N / Twin Lake and Alder Lake-H/P/U / Raptor Lake-H/P/U but reports selected outputs as disconnected, isolating HPD/EDID and mode programming for framebuffer diagnostics. It does not establish display operation.
+diff --git a/README_ja.md b/README_ja.md
+index 4ee53e3..faa3ed2 100644
+--- a/README_ja.md
++++ b/README_ja.md
+@@ -146,6 +146,7 @@ Alder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/UではGPU資源
+ 開発時の一時診断用に `-wex-reset-trace` を指定すると、GPUハングからの回復処理の各段階（チャネル再起動、エンジンリセット、スケジューラのリセットと再開、コマンドストリーマのリセット）を、レンダーエンジンのリセット関連およびリングのレジスタとともに `WEXGPUResetTrace` レジストリプロパティへ記録します。回復処理の動作は変更しません。
+ 実験的機能: `-wex-reset-restore` を指定すると、レンダードメインのGPUハングリセットの直前にレンダーエンジンのモード、ステータスページ、チキン、ユーザーモード許可リストの各レジスタとキャッシュ制御（MOCSおよびL3）テーブルを保存し、リセット後かつ処理の再投入前に書き戻します。リセットでこれらが消去されるGPU向けです。リセットで処理が失われたスタンプは、2秒後に加え、その後も待機側が進まないスタンプでタイムアウトした時点で完了扱いにします。リセットのトレースも有効になります。
+ 実験的機能: `-wex-no-multicontext` を指定すると、ドナーの2番目の（マルチコンテキスト・コンピュート）コマンドストリーマを無効にし、コンピュート処理をレンダーエンジンで実行します。
++実験的機能: `-wex-pm` を指定すると、起動 20 秒後にハイブリッド Alder Lake / Raptor Lake 向けの XE-PM CPU プロファイルを XCPM に適用します（P コアの HWP 要求を実際の最大性能に補正、EPP 0、省電力ターボ無効、XCPM のアイドル表で C8/C10 を有効化し存在しない C3 を無効化、ドライバのない IPU/GNA/ISH/DPTF/Thunderbolt DMA を D3hot に）。状態は `WEXPowerProfile` と `sysctl debug.xepm` に出ます。
+ 実験的機能: `-wex-scanout-coherent` を指定すると、ドナーがディスプレイプレーンにフリップしたサーフェスをすべて表示可能として扱い、以降の描画でドナーのディスプレイ向け（LLC にキャッシュしない）MOCS を使います。ディスプレイエンジンは LLC をスヌープしないため、これがないとパネルより大きい縮小 HiDPI のバッキングで、書き戻されていない描画途中のフレームが表示されます。
+ `-wex-adlp-load-only` は選択済みADL-P/RPL-Pで、FramebufferとAccelerator両方のnative probe/startを止め、GPUを初期化せずにロード段階を診断します。
+ `-wex-display13-offline` はAlder Lake-N / Twin LakeとAlder Lake-H/P/U / Raptor Lake-H/P/Uのnative display controller初期化を有効に保ち、選択した出力を未接続として扱います。FB診断でHPD/EDIDとmode設定を切り離すための設定で、表示成立を意味しません。
+diff --git a/WhateverXe/kern_host.cpp b/WhateverXe/kern_host.cpp
+index cf0f97b..701742e 100644
+--- a/WhateverXe/kern_host.cpp
++++ b/WhateverXe/kern_host.cpp
+@@ -27,7 +27,10 @@ void XeHost::init() {
+  xe.init();
+  XeDataAccess::init();
+ }
++void xePmInstall(KernelPatcher &patcher);
+ void XeHost::processKernel(KernelPatcher &patcher) {
++ // XE-PM (kern_xepm.cpp, -wex-pm) first: DeviceInfo::create can block.
++ xePmInstall(patcher);
+  auto info=DeviceInfo::create();if(!info)return;
+  auto gpu=OSDynamicCast(IOPCIDevice,info->videoBuiltin);
+  // Match WEG ordering: PCI config reads require a published IOPCIDevice.
+diff --git a/WhateverXe/kern_xepm.cpp b/WhateverXe/kern_xepm.cpp
+new file mode 100644
+index 0000000..64b4d46
+--- /dev/null
++++ b/WhateverXe/kern_xepm.cpp
+@@ -0,0 +1,167 @@
++//  XE-PM, from JulioNectar's NootedGreen fork (Hackintosh-XPS13Plus-IrisXe-Tahoe,
++//  commit 0492b29, src/NootedGreen/kern_xepm.cpp), shared with the hackintosh
++//  community. Adapted for WhateverXe: boot-arg -wex-pm, EPP fixed at 0 (sysctl
++//  debug.xepm.epp at runtime), log prefix WEX.
++//  XE-PM: CPU performance and idle power profile for hybrid Alder Lake / Raptor Lake (and Tiger Lake) under XCPM.
++//  Opt-in with -wex-pm. Everything is applied 20 s after the patcher loads (system up), re-checked at 60 s.
++//
++//  1. HWP units (hybrid P-cores). XCPM writes IA32_HWP_REQUEST (0x774) max/desired in 100 MHz ratio units (max = the
++//     TURBO_RATIO_LIMIT value, 50 on an i7-1360P). On hybrid P-cores one HWP performance unit is ~78.7 MHz (Linux
++//     intel_pstate hybrid scaling factor 78741; HWP_CAPABILITIES highest = 64 for 5.0 GHz), so max 50 caps them at
++//     ~3.9 GHz. The static XCPM routine at _xcpm_enable_pstate_ctrs+0x1190 (macOS 26.7.1 25G241) takes the target
++//     multiplier and writes the local CPU's request; it is routed, and after Apple's write the request is rescaled on
++//     cores whose highest perf exceeds the requested max (max -> highest, desired -> desired * highest / max). The
++//     route is installed only after the prologue and the write site match byte for byte.
++//  2. EPP. XCPM's frequency vector asks EPP 0x80. On ADL/RPL mobile parts that clips one-core turbo (Intel, Linux 5.17
++//     intel_pstate: EPP <= 102 needed). The profile writes EPP 0 (sysctl debug.xepm.epp to change).
++//  3. Energy-efficient turbo off (MSR_POWER_CTL 0x1FC bit 19).
++//  4. XCPM idle table (_xcpm_cstate_table): for the spoofed CPU it has C8 (0x40) and C10 (0x60) disabled and C3 (0x10,
++//     not an ADL/RPL/TGL state) enabled, so cores stop at C6 or fall back to C1. C8/C10 are enabled and C3 disabled,
++//     only if the three entries carry exactly those hints.
++//  5. D3hot for PCI functions macOS has no driver for (IPU camera, GNA, ISH, DPTF participant, Thunderbolt/USB4 DMA),
++//     by device id, only when nothing is attached (or only a client that never matched).
++//  Measured on a Dell XPS 13 Plus 9320 (i7-1360P): Geekbench 7 single-core 1269 -> 1697, multi-core 5859 -> 6148,
++//  one-thread clock 3.3 -> 4.3-4.85 GHz, idle package ~4.6 -> ~3.3 W.
++#include <Headers/kern_api.hpp>
++#include <Headers/kern_patcher.hpp>
++#include <IOKit/IOLib.h>
++#include <IOKit/pci/IOPCIDevice.h>
++#include <kern/thread_call.h>
++#include <sys/sysctl.h>
++
++extern "C" void mp_rendezvous_no_intrs(void (*fn)(void *), void *arg);
++
++static inline uint64_t xpRdmsr(uint32_t m) { uint32_t lo, hi; asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(m)); return ((uint64_t)hi << 32) | lo; }
++static inline void xpWrmsr(uint32_t m, uint64_t v) { asm volatile("wrmsr" : : "c"(m), "a"((uint32_t)v), "d"((uint32_t)(v >> 32))); }
++
++static bool gXpOn = false;
++static int gXpHwp = 0, gXpEpp = -1;                 // sysctl debug.xepm.hwp / .epp (root)
++static int gXpEet = 0, gXpCst = 0, gXpD3 = 0, gXpRoute = 0;   // status
++static mach_vm_address_t gXpOrgSetMult = 0, gXpCstPtr = 0;
++
++// ─── 1/2: XCPM HWP request ───────────────────────────────────────────────────────────────────────────────────────
++static uint64_t xpSetMult(uint64_t mult, uint64_t a1, uint64_t a2, uint64_t a3) {   // only edi is used by Apple
++	const uint64_t r = FunctionCast(xpSetMult, gXpOrgSetMult)(mult, a1, a2, a3);
++	// XCPM calls this before it enables HWP; the HWP MSRs #GP until IA32_PM_ENABLE bit 0 is set.
++	if (gXpHwp && (xpRdmsr(0x770) & 1)) {
++		const uint64_t v = xpRdmsr(0x774);
++		if (v & (1ULL << 42)) return r;   // package control: leave it alone
++		const uint32_t hi = (uint32_t)(xpRdmsr(0x771) & 0xff), max = (uint32_t)(v >> 8) & 0xff, des = (uint32_t)(v >> 16) & 0xff;
++		uint64_t nv = v;
++		if (max && hi > max && hi < 0xff) {
++			uint32_t d = des ? (des * hi + max / 2) / max : 0;
++			if (d > hi) d = hi;
++			nv = (nv & ~0xFFFF00ULL) | ((uint64_t)hi << 8) | ((uint64_t)d << 16);
++		}
++		if (gXpEpp >= 0) nv = (nv & ~0xFF000000ULL) | ((uint64_t)gXpEpp << 24);
++		if (nv != v) xpWrmsr(0x774, nv);
++	}
++	return r;
++}
++
++// ─── 3: energy-efficient turbo ───────────────────────────────────────────────────────────────────────────────────
++static void xpEetOne(void *) {
++	const uint64_t v = xpRdmsr(0x1FC);
++	if (!(v & (1ULL << 19))) xpWrmsr(0x1FC, v | (1ULL << 19));
++}
++
++// ─── 4: XCPM idle table ──────────────────────────────────────────────────────────────────────────────────────────
++static int xpCstFix() {
++	uint8_t *tab = gXpCstPtr ? *reinterpret_cast<uint8_t **>(gXpCstPtr) : nullptr;
++	if (!tab) return 2;
++	auto hint = [&](int i) { return *reinterpret_cast<volatile uint32_t *>(tab + i * 24 + 4); };
++	auto en = [&](int i) { return reinterpret_cast<volatile uint32_t *>(tab + i * 24 + 8); };
++	if (hint(0) != 0x60 || hint(2) != 0x40 || hint(6) != 0x10) return 3;
++	if (*en(0) == 1 && *en(2) == 1 && *en(6) == 0) return 1;
++	if (MachInfo::setKernelWriting(true, KernelPatcher::kernelWriteLock) != KERN_SUCCESS) return 4;
++	*en(0) = 1; *en(2) = 1; *en(6) = 0;
++	MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
++	return 1;
++}
++
++// ─── 5: D3hot for driverless functions ───────────────────────────────────────────────────────────────────────────
++static int xpD3() {
++	static const uint16_t ids[] = {
++		0xa75d, 0x465d, 0x9a19,           // IPU6 camera (RPL-P, ADL-P, TGL)
++		0xa74f, 0x464f, 0x9a11,           // GNA
++		0x51fc, 0x54fc, 0xa0fc,           // ISH (ADP-P, ADP-N, TGP-LP)
++		0xa71d, 0x461d, 0x9a03,           // DPTF processor participant
++		0xa73e, 0xa76d, 0x463e, 0x466d, 0x9a1b, 0x9a1d,   // Thunderbolt 4 / USB4 DMA (macOS has no host driver here)
++	};
++	int n = 0;
++	OSIterator *it = IOService::getMatchingServices(IOService::serviceMatching("IOPCIDevice"));
++	if (!it) return 0;
++	while (auto *o = it->getNextObject()) {
++		auto *d = OSDynamicCast(IOPCIDevice, o);
++		if (!d) continue;
++		if (IOService *cl = d->getClient())   // e.g. a USBToolBox instance on the TBT DMA that never matched
++			if (cl->getState() & (kIOServiceMatchedState | kIOServiceRegisteredState)) continue;
++		const uint32_t id = d->configRead32(0);
++		if ((id & 0xffff) != 0x8086) continue;
++		bool want = false;
++		for (uint16_t w : ids) if (w == (id >> 16)) want = true;
++		uint8_t pm = 0;
++		if (!want || !d->findPCICapability(kIOPCIPowerManagementCapability, &pm) || !pm) continue;
++		const uint16_t cs = d->configRead16(pm + 4);
++		if ((cs & 3) != 3) { d->configWrite16(pm + 4, (uint16_t)(cs | 3)); n++; }
++	}
++	it->release();
++	return n;
++}
++
++static void xpApply(thread_call_param_t, thread_call_param_t) {
++	gXpCst = xpCstFix();
++	gXpD3 += xpD3();
++	if (!gXpEet) { mp_rendezvous_no_intrs(xpEetOne, nullptr); gXpEet = (int)((xpRdmsr(0x1FC) >> 19) & 1); }
++	if (gXpOrgSetMult) gXpHwp = 1;   // takes effect at XCPM's next request on each CPU
++	uint64_t st[] {1,(uint64_t)gXpHwp,(uint64_t)gXpRoute,(uint64_t)(int64_t)gXpEpp,(uint64_t)gXpEet,(uint64_t)gXpCst,(uint64_t)gXpD3};
++	IORegistryEntry::getRegistryRoot()->setProperty("WEXPowerProfile",st,sizeof(st));
++	IOLog("WEX PM: profile on: HWP rescale %d (route %d), EPP %d, EE turbo off %d, C8/C10 %d, D3 %d\n",
++	      gXpHwp, gXpRoute, gXpEpp, gXpEet, gXpCst, gXpD3);
++}
++
++SYSCTL_NODE(_debug, OID_AUTO, xepm, CTLFLAG_RW, 0, "WhateverXe XE-PM");
++SYSCTL_INT(_debug_xepm, OID_AUTO, hwp, CTLFLAG_RW, &gXpHwp, 0, "HWP rescale on hybrid P-cores");
++SYSCTL_INT(_debug_xepm, OID_AUTO, epp, CTLFLAG_RW, &gXpEpp, 0, "EPP override, -1 = XCPM's");
++SYSCTL_INT(_debug_xepm, OID_AUTO, eet_off, CTLFLAG_RD, &gXpEet, 0, "");
++SYSCTL_INT(_debug_xepm, OID_AUTO, cst, CTLFLAG_RD, &gXpCst, 0, "1 = C8/C10 on");
++SYSCTL_INT(_debug_xepm, OID_AUTO, d3, CTLFLAG_RD, &gXpD3, 0, "");
++SYSCTL_INT(_debug_xepm, OID_AUTO, route, CTLFLAG_RD, &gXpRoute, 0, "1 = HWP route installed");
++
++void xePmInstall(KernelPatcher &patcher) {
++	if (!checkKernelArgument("-wex-pm")) return;
++	gXpOn = true;
++	gXpEpp = 0;
++	gXpCstPtr = patcher.solveSymbol(KernelPatcher::KernelID, "_xcpm_cstate_table");
++	patcher.clearError();
++	const mach_vm_address_t base = patcher.solveSymbol(KernelPatcher::KernelID, "_xcpm_enable_pstate_ctrs");
++	patcher.clearError();
++	if (base) {
++		const mach_vm_address_t fn = base + 0x1190;
++		static const uint8_t pro[] = {0x55, 0x48, 0x89, 0xE5, 0x53, 0x50, 0x89, 0xFB};   // push rbp; mov rbp,rsp; push rbx; push rax; mov ebx,edi
++		static const uint8_t wr[] = {0x89, 0xF8, 0xC1, 0xEA, 0x18, 0xB9, 0x74, 0x07, 0x00, 0x00, 0x0F, 0x30};   // +0x168: ...; mov ecx,0x774; wrmsr
++		auto *p = reinterpret_cast<const uint8_t *>(fn);
++		bool ok = true;
++		for (size_t i = 0; i < sizeof(pro); i++) if (p[i] != pro[i]) ok = false;
++		for (size_t i = 0; i < sizeof(wr); i++) if (p[0x168 + i] != wr[i]) ok = false;
++		if (ok) {
++			gXpOrgSetMult = patcher.routeFunction(fn, reinterpret_cast<mach_vm_address_t>(xpSetMult), true);
++			if (patcher.getError() != KernelPatcher::Error::NoError) { gXpOrgSetMult = 0; patcher.clearError(); }
++		}
++		gXpRoute = gXpOrgSetMult ? 1 : (ok ? 5 : 3);
++	} else gXpRoute = 2;
++	sysctl_register_oid(&sysctl__debug_xepm);
++	sysctl_register_oid(&sysctl__debug_xepm_hwp);
++	sysctl_register_oid(&sysctl__debug_xepm_epp);
++	sysctl_register_oid(&sysctl__debug_xepm_eet_off);
++	sysctl_register_oid(&sysctl__debug_xepm_cst);
++	sysctl_register_oid(&sysctl__debug_xepm_d3);
++	sysctl_register_oid(&sysctl__debug_xepm_route);
++	uint64_t dl;
++	thread_call_t t20 = thread_call_allocate(xpApply, nullptr), t60 = thread_call_allocate(xpApply, nullptr);
++	clock_interval_to_deadline(20, kSecondScale, &dl);
++	if (t20) thread_call_enter_delayed(t20, dl);
++	clock_interval_to_deadline(60, kSecondScale, &dl);
++	if (t60) thread_call_enter_delayed(t60, dl);
++	IOLog("WEX PM: -wex-pm, HWP route %d, idle table %s; profile in 20 s\n", gXpRoute, gXpCstPtr ? "found" : "missing");
++}
+diff --git a/tests/fixtures/boot_argument_names.json b/tests/fixtures/boot_argument_names.json
+index 9563a11..603d14c 100644
+--- a/tests/fixtures/boot_argument_names.json
++++ b/tests/fixtures/boot_argument_names.json
+@@ -140,6 +140,7 @@
+   "-wex-adlp-readout-noaux": [],
+   "-wex-adlp-edp": [],
+   "-wex-no-multicontext": [],
++  "-wex-pm": [],
+   "-wex-reset-restore": [],
+   "-wex-reset-trace": [],
+   "-wex-scanout-coherent": [],
+diff --git a/tests/host_publication.py b/tests/host_publication.py
+index f4dd6eb..98d1a83 100644
+--- a/tests/host_publication.py
++++ b/tests/host_publication.py
+@@ -43,6 +43,7 @@ struct KernelPatcher {
+  bool routeMultiple(size_t,RouteRequest*,unsigned,mach_vm_address_t,size_t){return true;}
+  void clearError(){}
+ };
++static void xePmInstall(KernelPatcher &) {}
+ namespace XeDataAccess {bool processKext(KernelPatcher&,size_t,mach_vm_address_t,size_t){return false;}void processKernel(KernelPatcher &){assert(published);events.push_back(7);}}
+ struct Graphics {size_t loadIndex=4;bool off=false;void switchOff(){off=true;}} graphics;
+ struct {size_t loadIndex=5;}backlight;

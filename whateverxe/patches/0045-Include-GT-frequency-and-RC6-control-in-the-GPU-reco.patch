@@ -1,7 +1,7 @@
 From a47af29ee112a9c519b36c596b68d4b3b613239e Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:53:38 +0530
-Subject: [PATCH 45/47] Include GT frequency and RC6 control in the GPU
+Subject: [PATCH 45/54] Include GT frequency and RC6 control in the GPU
  recovery register copies
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

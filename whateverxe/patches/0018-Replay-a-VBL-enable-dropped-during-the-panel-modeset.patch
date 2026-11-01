@@ -1,7 +1,7 @@
 From ceaa2ea38846e50bab01749390653b2d3ed17488 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 14:58:42 +0530
-Subject: [PATCH 18/47] Replay a VBL enable dropped during the panel modeset
+Subject: [PATCH 18/54] Replay a VBL enable dropped during the panel modeset
 
 hwSetInterruptState drops requests while the FB has no active path,
 which is the case inside a modeset; the lost VBL enable made every later

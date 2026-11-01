@@ -1,7 +1,7 @@
 From 4334b0afd75d32ff178d1ff2292efcb87d29cbda Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 21:08:41 +0530
-Subject: [PATCH 35/47] Display13 eDP backlight: 'bklt' 0 clears
+Subject: [PATCH 35/54] Display13 eDP backlight: 'bklt' 0 clears
  BACKLIGHT_ENABLE (panel off) instead of the floor level
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>

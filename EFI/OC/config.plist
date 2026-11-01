@@ -780,6 +780,24 @@
 				<key>Arch</key>
 				<string>Any</string>
 				<key>BundlePath</key>
+				<string>ITHC.kext</string>
+				<key>Comment</key>
+				<string>Intel THC touchscreen (port of ithc)</string>
+				<key>Enabled</key>
+				<true/>
+				<key>ExecutablePath</key>
+				<string>Contents/MacOS/ITHC</string>
+				<key>MaxKernel</key>
+				<string></string>
+				<key>MinKernel</key>
+				<string></string>
+				<key>PlistPath</key>
+				<string>Contents/Info.plist</string>
+			</dict>
+			<dict>
+				<key>Arch</key>
+				<string>Any</string>
+				<key>BundlePath</key>
 				<string>VoodooPS2Controller.kext</string>
 				<key>Comment</key>
 				<string></string>
@@ -1162,7 +1180,7 @@
 				AAAAAAAAAAAAAAAAAAA=
 				</data>
 				<key>boot-args</key>
-				<string>-allow3d -disablegfxfirmware -igfxdvmt -wex-adlp-edp keepsyms=1 msgbuf=4194304 shda-lang=en alcid=11 -wex-reset-restore -wex-no-multicontext</string>
+				<string>-allow3d -disablegfxfirmware -igfxdvmt -wex-adlp-edp keepsyms=1 shda-lang=en alcid=11 -wex-reset-restore -wex-no-multicontext -wex-scanout-coherent -wex-pm</string>
 				<key>csr-active-config</key>
 				<data>
 				AwgAAA==

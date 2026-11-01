@@ -1,7 +1,7 @@
 From 7f60f8c9052ac70f43d597498187ddc487e88544 Mon Sep 17 00:00:00 2001
 From: retropineaple <118107729+retropineaple@users.noreply.github.com>
 Date: Tue, 27 Oct 2026 14:42:08 +0530
-Subject: [PATCH 17/47] Cap the extended DPCD link rate and snapshot live panel
+Subject: [PATCH 17/54] Cap the extended DPCD link rate and snapshot live panel
  state
 
 DPCD 1.4 sinks repeat MAX_LINK_RATE at 0x2201, which the donor reads, so
