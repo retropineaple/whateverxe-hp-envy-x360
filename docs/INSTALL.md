@@ -103,13 +103,14 @@ Reboot afterwards. Limits:
 ## Boot-args in this EFI
 
 ```
--allow3d -disablegfxfirmware -igfxdvmt -wex-adlp-edp keepsyms=1 shda-lang=en alcid=11 -wex-reset-restore -wex-no-multicontext -wex-scanout-coherent -wex-pm
+-allow3d -disablegfxfirmware -igfxdvmt -wex-adlp-edp keepsyms=1 shda-lang=en alcid=11 -wex-reset-restore -wex-no-multicontext -wex-scanout-coherent -wex-pm -btleadv -itlawdlcoexprobe -itlawdliface -itlawdlnativeup -itlawdlcoexrx -itlawdlcoextx -itlawdlcoexmulti -itlawdlcoexdata -itlawdlmitx -itlawdlelicit -itlawdlcaps -itlawdlsvcmerge -itlawdlawsync itlawdlintcoal=4 -itlawdlcoexbatx -itlawdlcoexpeerpause -itlawdlcoexbatrace itlawdltxqueue=4096
 ```
 
 `-wex-reset-restore` and `-wex-no-multicontext` are what make GPU hangs
 recover instead of freezing the laptop. `-wex-scanout-coherent` keeps HiDPI
 modes above 1440×900 clean, and `-wex-pm` is the CPU profile. See
-[EFI.md](EFI.md#graphics).
+[EFI.md](EFI.md#graphics). `-btleadv` and the `-itlawdl…`/`itlawdl…` flags turn
+on AirDrop (beta); see [EFI.md](EFI.md#wi-fi-and-airdrop).
 
 ## Checklist
 
@@ -118,6 +119,7 @@ modes above 1440×900 clean, and `-wex-pm` is the CPU profile. See
 - [ ] Brightness slider and F2/F3 keys (down to fully off and back)
 - [ ] Lid close turns the screen off and reopening brings it back
 - [ ] Wi-Fi, Bluetooth, keyboard, USB ports, battery
+- [ ] AirDrop to and from an iPhone (beta), Handoff, Universal Clipboard
 - [ ] Touchscreen: tap, scroll and multi-finger gestures
 - [ ] Touchpad (untested on the author's laptop: its touchpad hardware is broken)
 - [ ] Headphone jack output

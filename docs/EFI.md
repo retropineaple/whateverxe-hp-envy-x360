@@ -72,8 +72,27 @@ amplifiers that macOS has no driver for.
 
 | Setting | Why |
 |---|---|
-| IntelBluetoothFirmware, IntelBTPatcher 2.5.1, BlueToolFixup 2.7.3 | Intel AX211 Bluetooth. |
+| IntelBluetoothFirmware 2.5.1, BlueToolFixup 2.7.3 | Intel AX211 Bluetooth. |
+| IntelBTPatcher 2.5.1, **disabled** | Kept in the EFI but turned off: BTLEAdvFixup takes over its job, and Lilu panics if both hook the same function. |
+| BTLEAdvFixup 0.8.0 + boot-arg `-btleadv` | Lets macOS start Bluetooth LE advertising on the Intel controller, which AirDrop needs. From [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm). |
 | NVRAM `bluetoothExternalDongleFailed` = `00`, `bluetoothInternalControllerInfo` = 14 zero bytes (also in NVRAM → Delete) | The standard Intel Bluetooth fix on recent macOS. Without them Bluetooth stays off. |
+
+## Wi-Fi and AirDrop
+
+`ForbiddenItlwm.kext` 0.1.0-beta1 replaces AirportItlwm. It's the author's
+[ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm): AirportItlwm
+for Tahoe plus AirDrop (AWDL), byte-identical to that project's release.
+Normal Wi-Fi works as with AirportItlwm. AirDrop runs beside it on channel
+149 and needs these boot-args, explained in ForbiddenItlwm's
+[BOOT-FLAGS.md](https://github.com/retropineaple/ForbiddenItlwm/blob/main/docs/BOOT-FLAGS.md):
+
+```
+-btleadv -itlawdlcoexprobe -itlawdliface -itlawdlnativeup -itlawdlcoexrx -itlawdlcoextx -itlawdlcoexmulti -itlawdlcoexdata -itlawdlmitx -itlawdlelicit -itlawdlcaps -itlawdlsvcmerge -itlawdlawsync itlawdlintcoal=4 -itlawdlcoexbatx -itlawdlcoexpeerpause -itlawdlcoexbatrace itlawdltxqueue=4096
+```
+
+It's a beta. Removing those boot-args turns AirDrop off and leaves plain
+Wi-Fi. It's tied to macOS 26.7.1 (25G241): don't keep the AirDrop boot-args on
+any other build.
 
 ## CPU name
 
@@ -107,7 +126,7 @@ Other kexts:
 - ITHC (touchscreen: Intel Touch Host Controller driver, after VoodooI2CHID
   in `Kernel → Add`; source and build in [`ithc/`](../ithc))
 - VoodooPS2Controller (keyboard)
-- AirportItlwm (Wi-Fi)
+- ForbiddenItlwm (Wi-Fi and AirDrop, see above)
 - HoRNDIS (Android USB tethering)
 
 ## Booter

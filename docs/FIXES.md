@@ -66,7 +66,9 @@ each is explained in [WHATEVERXE-CHANGES.md](WHATEVERXE-CHANGES.md).
 | Battery drain and heat | Better with `-wex-pm` (package reaches PC3, about 4–6.5 W idle), but Linux reaches PC8/PC10 at 2–3 W. That needs the display firmware (DMC), DC5/DC6 and PSR, which aren't done: a first attempt reached DC5 but froze the laptop, so it isn't included |
 | Occasional animation stutter | macOS on Intel doesn't know P-cores from E-cores, so UI work sometimes runs on a slower E-core |
 | Safari video in software | Safari's GPU process refuses the ad-hoc signed VA driver |
-| AirDrop / Continuity | Not possible with the Intel AX211 |
+| AirDrop | Works in both directions as a beta through [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm); cold iPhone-to-Mac connects can take 3–10 s |
+| Instant Hotspot | Doesn't work yet |
+| Continuity Camera | Doesn't work; probably not possible without a T2 chip |
 | Apple TV app / FairPlay | Not supported by WhateverXe |
 | Turning off the multi-context compute ring | Fixes the deadlock; long-term side effects not fully known |
 | Activity Monitor shows 0% GPU | The GPU works; its busy counter is kept by firmware that isn't loaded, so nothing fills it in |

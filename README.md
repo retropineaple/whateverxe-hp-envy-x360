@@ -52,8 +52,11 @@ written for it.
 - **Hardware video decode** (H.264/HEVC) through VideoToolbox
 - **Brightness**: slider and F2/F3 keys, down to fully off and back
 - **Lid**: closing turns the panel off, opening brings it back (with sleep disabled)
-- **Wi-Fi** (AirportItlwm), **Bluetooth** (Intel): headphone audio and the
+- **Wi-Fi** ([ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm), based on AirportItlwm), **Bluetooth** (Intel): headphone audio and the
   headset mic (except for Siri)
+- **AirDrop with an iPhone, both ways, while Wi-Fi stays connected**
+  (ForbiddenItlwm beta, about 20 MB/s each way), plus **Handoff** both ways and
+  **Universal Clipboard**
 - **Headphone jack** output (ALC245 layout 11, DSP removed)
 - **Keyboard** (VoodooPS2), **battery**, **USB**
 - **CPU name** shows correctly (RestrictEvents)
@@ -86,7 +89,11 @@ written for it.
   E-cores, so UI work sometimes lands on a slower E-core.
 - **Safari video** decodes in software: Safari refuses the patched VA driver,
   and the unpatched one crashes on video processing.
-- **AirDrop / Continuity**: not possible with the Intel AX211.
+- **AirDrop is a beta** ([ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm)):
+  the first iPhone-to-Mac send after a while can take 3–10 s to connect.
+  **Instant Hotspot** doesn't work yet, and **Continuity Camera** doesn't work
+  (probably not possible without a T2 chip). Removing the `-itlawdl*` and
+  `-btleadv` boot-args turns AirDrop off and leaves normal Wi-Fi.
 - **Apple TV app / FairPlay video**: not supported by WhateverXe.
 
 Details, causes and what was tried are in [docs/FIXES.md](docs/FIXES.md).
@@ -97,8 +104,11 @@ Details, causes and what was tried are in [docs/FIXES.md](docs/FIXES.md).
   None of this exists without it.
 - [acidanthera](https://github.com/acidanthera): OpenCore, Lilu, VirtualSMC,
   AppleALC, BrightnessKeys, RestrictEvents, NVMeFix
-- [OpenIntelWireless](https://github.com/OpenIntelWireless): AirportItlwm,
+- [OpenIntelWireless](https://github.com/OpenIntelWireless): itlwm/AirportItlwm,
   IntelBluetoothFirmware
+- [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm) (this
+  project's author): AirDrop for Intel Wi-Fi, a fork of laobamac's AirportItlwm
+  for Tahoe, plus BTLEAdvFixup
 - [laobamac](https://github.com/laobamac/SimpleHDA) for SimpleHDA
 - VoodooI2C, VoodooPS2, USBToolBox, CpuTopologyRebuild and HoRNDIS authors
 - [quo/ithc-linux](https://github.com/quo/ithc-linux): the Linux THC driver
