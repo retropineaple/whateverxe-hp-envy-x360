@@ -93,8 +93,9 @@ written for it.
   and the unpatched one crashes on video processing.
 - **AirDrop is a beta** ([ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm)):
   the first iPhone-to-Mac send after a while can take 3–10 s to connect.
-  **Instant Hotspot** doesn't work yet, and **Continuity Camera** doesn't work
-  (probably not possible without a T2 chip). Removing the `-itlawdl*` and
+  **Instant Hotspot** and **Continuity Camera** don't work yet. **iPhone
+  Mirroring** doesn't work (probably not possible without a T2 chip or Apple
+  silicon). Removing the `-itlawdl*` and
   `-btleadv` boot-args turns AirDrop off and leaves normal Wi-Fi.
 - **Apple TV app / FairPlay video**: not supported by WhateverXe.
 

@@ -68,7 +68,8 @@ each is explained in [WHATEVERXE-CHANGES.md](WHATEVERXE-CHANGES.md).
 | Safari video in software | Safari's GPU process refuses the ad-hoc signed VA driver |
 | AirDrop | Works in both directions as a beta through [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm); cold iPhone-to-Mac connects can take 3–10 s |
 | Instant Hotspot | Doesn't work yet |
-| Continuity Camera | Doesn't work; probably not possible without a T2 chip |
+| Continuity Camera | Doesn't work yet |
+| iPhone Mirroring | Doesn't work; probably not possible without a T2 chip or Apple silicon |
 | Apple TV app / FairPlay | Not supported by WhateverXe |
 | Turning off the multi-context compute ring | Fixes the deadlock; long-term side effects not fully known |
 | Activity Monitor shows 0% GPU | The GPU works; its busy counter is kept by firmware that isn't loaded, so nothing fills it in |
