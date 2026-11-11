@@ -908,7 +908,7 @@
 				<key>BundlePath</key>
 				<string>ForbiddenItlwm.kext</string>
 				<key>Comment</key>
-				<string>ForbiddenItlwm 0.1.0-beta1</string>
+				<string>ForbiddenItlwm 0.2.0-beta1</string>
 				<key>Enabled</key>
 				<true/>
 				<key>ExecutablePath</key>

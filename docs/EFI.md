@@ -79,7 +79,7 @@ amplifiers that macOS has no driver for.
 
 ## Wi-Fi and AirDrop
 
-`ForbiddenItlwm.kext` 0.1.0-beta1 replaces AirportItlwm. It's the author's
+`ForbiddenItlwm.kext` 0.2.0-beta1 replaces AirportItlwm. It's the author's
 [ForbiddenItlwm](https://github.com/retropineaple/ForbiddenItlwm): AirportItlwm
 for Tahoe plus AirDrop (AWDL), byte-identical to that project's release.
 Normal Wi-Fi works as with AirportItlwm. AirDrop runs beside it on channel
@@ -91,8 +91,13 @@ Normal Wi-Fi works as with AirportItlwm. AirDrop runs beside it on channel
 ```
 
 It's a beta. Removing those boot-args turns AirDrop off and leaves plain
-Wi-Fi. It's tied to macOS 26.7.1 (25G241): don't keep the AirDrop boot-args on
-any other build.
+Wi-Fi. AirDrop starts only on macOS 26.7.1, 26.7.2 and 26.7.3. On other builds
+the driver keeps it off by itself. This EFI is tested on 26.7.1.
+
+ForbiddenItlwm 0.2.0 also sets the Wi-Fi interface's link quality, which the
+Tahoe AirportItlwm never did. Without it macOS rates Wi-Fi "off" (check with
+`printf 'show State:/Network/Interface/en0/LinkQuality\n' | scutil`), and Apple
+Push, iMessage and FaceTime can't connect over Wi-Fi.
 
 ## CPU name
 

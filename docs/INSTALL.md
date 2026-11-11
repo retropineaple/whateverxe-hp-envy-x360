@@ -20,7 +20,7 @@ The published `config.plist` has empty `SystemSerialNumber`, `MLB`,
 
 1. Use [GenSMBIOS](https://github.com/corpnewt/GenSMBIOS) to generate a
    **MacBookPro16,2** serial, MLB and UUID.
-2. For `ROM`, use your Wi-Fi card's MAC address (6 bytes).
+2. For `ROM`, use your Wi-Fi card's MAC address (6 bytes): `ifconfig en0 | grep ether`, without the colons. This is the usual recommendation for iMessage.
 3. Fill them into `PlatformInfo → Generic` with
    [ProperTree](https://github.com/corpnewt/ProperTree).
 

@@ -60,9 +60,11 @@ written for it.
 - **Headphone jack** output (ALC245 layout 11, DSP removed)
 - **Keyboard** (VoodooPS2), **battery**, **USB**
 - **CPU name** shows correctly (RestrictEvents)
-- **iCloud services** work, once you've generated your own SMBIOS (serial,
-  MLB, UUID and ROM). The published config has these blank. See
+- **iCloud services and iMessage** work, once you've generated your own SMBIOS
+  (serial, MLB, UUID and ROM). The published config has these blank. See
   [step 1 of the setup guide](docs/INSTALL.md#1-fill-in-your-own-smbios).
+  iMessage over Wi-Fi needs ForbiddenItlwm 0.2.0 or newer: the original
+  AirportItlwm for Tahoe leaves Wi-Fi rated "off", so Apple Push never connects.
 
 ## What doesn't work / known issues
 
